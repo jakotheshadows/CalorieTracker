@@ -210,6 +210,23 @@
     </aside>
 </div>
 
+@if (_confirmOverwrite)
+{
+    <div class="modal-backdrop" @onclick="() => _confirmOverwrite = false">
+        <div class="modal-panel modal-narrow" @onclick:stopPropagation="true">
+            <h2>Overwrite template?</h2>
+            <p class="muted">
+                A template named “@_newTemplateName.Trim()” already exists.
+                Replace it with this day's current plan?
+            </p>
+            <div class="btn-row modal-actions">
+                <button class="btn btn-accent" @onclick="ConfirmOverwriteAsync">Overwrite</button>
+                <button class="btn" @onclick="() => _confirmOverwrite = false">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
 @if (_randOpen)
 {
     <div class="modal-backdrop" @onclick="() => _randOpen = false">
@@ -313,6 +330,7 @@
     private string _templateSel = "";
     private string? _templateToDelete;
     private bool _savingTemplate;
+    private bool _confirmOverwrite;
     private string _newTemplateName = "";
     private string? _templateError;
 
@@ -409,7 +427,24 @@
 
     private async Task SaveTemplateAsync()
     {
-        _templateError = await State.SaveTemplateAsync(_newTemplateName, State.GetDay(_date));
+        if (State.TemplateExists(_newTemplateName))
+        {
+            _templateError = null;
+            _confirmOverwrite = true;
+            return;
+        }
+        await DoSaveTemplateAsync(overwrite: false);
+    }
+
+    private async Task ConfirmOverwriteAsync()
+    {
+        _confirmOverwrite = false;
+        await DoSaveTemplateAsync(overwrite: true);
+    }
+
+    private async Task DoSaveTemplateAsync(bool overwrite)
+    {
+        _templateError = await State.SaveTemplateAsync(_newTemplateName, State.GetDay(_date), overwrite);
         if (_templateError is null)
         {
             _templateSel = _newTemplateName.Trim();

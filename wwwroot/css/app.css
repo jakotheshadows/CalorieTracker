@@ -258,6 +258,7 @@ textarea.input { resize: vertical; }
     box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
 }
 .modal-actions { justify-content: flex-end; margin-top: 1.25rem; }
+.modal-narrow { max-width: 430px; }
 
 .alert-error {
     background: rgba(224, 102, 102, .12);

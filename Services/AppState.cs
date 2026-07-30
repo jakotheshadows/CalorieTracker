@@ -179,14 +179,22 @@ public class AppState(LocalStore store)
     public IEnumerable<string> TemplateNames =>
         Data.Templates.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Save a snapshot of <paramref name="entries"/> under a new template name. Create-only: existing names are rejected.</summary>
-    public async Task<string?> SaveTemplateAsync(string name, List<ScheduleEntry> entries)
+    public bool TemplateExists(string name) =>
+        Data.Templates.Keys.Any(k => string.Equals(k, name?.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Save a snapshot of <paramref name="entries"/> under a template name. Existing names are rejected unless <paramref name="overwrite"/> is set.</summary>
+    public async Task<string?> SaveTemplateAsync(string name, List<ScheduleEntry> entries, bool overwrite = false)
     {
         name = name?.Trim() ?? "";
         if (name.Length == 0) return "Template name is required.";
         if (entries.Count == 0) return "This day has no entries to save.";
-        if (Data.Templates.Keys.Any(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase)))
-            return $"A template named \"{name}\" already exists.";
+
+        var existing = Data.Templates.Keys.FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            if (!overwrite) return $"A template named \"{existing}\" already exists.";
+            Data.Templates.Remove(existing);
+        }
 
         Data.Templates[name] = entries
             .Select(e => new ScheduleEntry { ItemName = e.ItemName, Servings = e.Servings })
