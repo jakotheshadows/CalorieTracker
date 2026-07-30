@@ -1,0 +1,87 @@
+@page "/settings"
+@inject AppState State
+@inject LocalStore Store
+
+<PageTitle>CalTrack — Settings</PageTitle>
+
+<div class="page-header">
+    <h1>Settings</h1>
+</div>
+
+<div class="settings-grid">
+    <div class="card">
+        <h3>Backup &amp; sync</h3>
+        <p class="muted small">
+            All data lives in this browser's local storage. To back up or move it to another
+            device, export everything (menu items + schedule) as a JSON file and import it there.
+            Keep the file in your own cloud storage (Drive, Dropbox, OneDrive…) to sync between devices.
+        </p>
+
+        @if (_importError is not null)
+        {
+            <div class="alert-error">@_importError</div>
+        }
+        @if (_importOk)
+        {
+            <div class="alert-ok">Import complete.</div>
+        }
+
+        <div class="btn-row">
+            <button class="btn btn-accent" @onclick="ExportAsync">Export JSON</button>
+            <label class="btn file-btn">
+                Import JSON
+                <InputFile OnChange="ImportAsync" accept=".json,application/json" />
+            </label>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Danger zone</h3>
+        @if (_confirmClear)
+        {
+            <p class="muted small">This permanently deletes all menu items and schedule data stored in this browser. Export a backup first if you might want it back.</p>
+            <div class="btn-row">
+                <button class="btn btn-danger" @onclick="ClearAllAsync">Yes, delete everything</button>
+                <button class="btn" @onclick="() => _confirmClear = false">Cancel</button>
+            </div>
+        }
+        else
+        {
+            <div class="btn-row">
+                <button class="btn btn-ghost-danger" @onclick="() => _confirmClear = true">Clear all local data…</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private string? _importError;
+    private bool _importOk;
+    private bool _confirmClear;
+
+    private async Task ExportAsync() =>
+        await Store.DownloadFileAsync($"caltrack-export-{DateTime.Now:yyyyMMdd}.json", State.ExportJson());
+
+    private async Task ImportAsync(InputFileChangeEventArgs e)
+    {
+        _importError = null;
+        _importOk = false;
+        try
+        {
+            using var reader = new StreamReader(e.File.OpenReadStream(maxAllowedSize: 20 * 1024 * 1024));
+            var json = await reader.ReadToEndAsync();
+            _importError = await State.ImportJsonAsync(json);
+            _importOk = _importError is null;
+        }
+        catch (Exception ex)
+        {
+            _importError = "Import failed: " + ex.Message;
+        }
+    }
+
+    private async Task ClearAllAsync()
+    {
+        _confirmClear = false;
+        await State.ClearAllAsync();
+    }
+}

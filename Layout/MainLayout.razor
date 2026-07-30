@@ -1,0 +1,31 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject AppState State
+
+<div class="app-shell">
+    <header class="topbar">
+        <a class="brand" href="">🥗 <span>CalTrack</span></a>
+        <nav class="topnav">
+            <NavLink href="" Match="NavLinkMatch.All">Home</NavLink>
+            <NavLink href="foods">Menu Items</NavLink>
+            <NavLink href="schedule">Schedule</NavLink>
+            <NavLink href="settings">Settings</NavLink>
+        </nav>
+    </header>
+
+    <main class="page-main">
+        @Body
+    </main>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        await State.EnsureLoadedAsync();
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= OnChanged;
+}

@@ -1,0 +1,60 @@
+@* Aggregate nutrition summary for a day / week / month scope. *@
+
+<div class="totals-panel card">
+    <div class="totals-header">
+        <h3>@Title</h3>
+        @if (DayCount > 1)
+        {
+            <span class="muted small">@Totals.DaysWithEntries of @DayCount days planned</span>
+        }
+    </div>
+
+    <div class="totals-cal">
+        <span class="cal-big">@Totals.Calories.ToString("N0")</span>
+        <span class="cal-unit">kcal</span>
+        @if (DayCount > 1 && Totals.DaysWithEntries > 0)
+        {
+            <span class="cal-avg">@((Totals.Calories / Totals.DaysWithEntries).ToString("N0")) / planned day</span>
+        }
+    </div>
+
+    <div class="macro-chips">
+        @foreach (var m in NutrientCatalog.Macros)
+        {
+            var v = Totals.Nutrient(m.Key);
+            <div class="macro-chip macro-@m.Key">
+                <span class="macro-label">@m.Label</span>
+                <span class="macro-value">@(v is null ? "—" : $"{v.Value.ToString(v.Value >= 100 ? "N0" : "N1")} {m.Unit}")</span>
+            </div>
+        }
+    </div>
+
+    @{
+        var micros = NutrientCatalog.Micros.Where(n => Totals.Nutrient(n.Key) is not null).ToList();
+    }
+    @if (micros.Count > 0)
+    {
+        <table class="micro-table">
+            <tbody>
+                @foreach (var n in micros)
+                {
+                    var v = Totals.Nutrient(n.Key)!.Value;
+                    <tr>
+                        <td class="muted">@n.Label</td>
+                        <td class="num">@v.ToString(v >= 100 ? "N0" : "N1") @n.Unit</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    else if (Totals.EntryCount == 0)
+    {
+        <div class="muted small">Nothing planned yet.</div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Totals";
+    [Parameter] public Totals Totals { get; set; } = new();
+    [Parameter] public int DayCount { get; set; } = 1;
+}

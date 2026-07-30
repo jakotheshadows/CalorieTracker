@@ -1,0 +1,240 @@
+@page "/foods"
+@implements IDisposable
+@inject AppState State
+
+<PageTitle>CalTrack — Menu Items</PageTitle>
+
+<div class="page-header">
+    <h1>Menu Items</h1>
+    <button class="btn btn-accent" @onclick="StartAdd">+ New item</button>
+</div>
+
+<div class="toolbar">
+    <input class="input search" placeholder="Search items…" @bind="_search" @bind:event="oninput" />
+    <select class="input" @bind="_categoryFilter">
+        <option value="">All categories</option>
+        <option value="Food">Food</option>
+        <option value="Beverage">Beverage</option>
+        <option value="Snack">Snack</option>
+    </select>
+</div>
+
+@{ var items = Filtered().ToList(); }
+@if (State.Data.Items.Count == 0)
+{
+    <div class="card empty-state">
+        <p>No menu items yet. Add the foods, beverages, and snacks you eat — only a name is required.</p>
+    </div>
+}
+else if (items.Count == 0)
+{
+    <div class="card empty-state"><p class="muted">No items match your search.</p></div>
+}
+else
+{
+    <div class="card table-card">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Serving</th>
+                    <th class="num">Calories</th>
+                    <th class="num">Protein</th>
+                    <th class="num">Carbs</th>
+                    <th class="num">Fat</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in items)
+                {
+                    <tr>
+                        <td>
+                            <span class="item-name">@item.Name</span>
+                            @if (!string.IsNullOrWhiteSpace(item.Description))
+                            {
+                                <div class="muted small item-desc">@item.Description</div>
+                            }
+                        </td>
+                        <td><span class="badge badge-@item.Category.ToString().ToLowerInvariant()">@item.Category</span></td>
+                        <td class="muted">@(item.ServingSize ?? "—")</td>
+                        <td class="num">@(item.Calories?.ToString("N0") ?? "—")</td>
+                        <td class="num">@FormatNutrient(item, "protein")</td>
+                        <td class="num">@FormatNutrient(item, "carbs")</td>
+                        <td class="num">@FormatNutrient(item, "fat")</td>
+                        <td class="actions">
+                            <button class="btn btn-sm" @onclick="() => StartEdit(item)">Edit</button>
+                            @if (_confirmDelete == item.Name)
+                            {
+                                <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(item.Name)">Confirm?</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-sm btn-ghost-danger" @onclick="() => _confirmDelete = item.Name">Delete</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (_editing is not null)
+{
+    <div class="modal-backdrop" @onclick="CancelEdit">
+        <div class="modal-panel" @onclick:stopPropagation="true">
+            <h2>@(_originalName is null ? "New menu item" : $"Edit “{_originalName}”")</h2>
+
+            @if (_error is not null)
+            {
+                <div class="alert-error">@_error</div>
+            }
+
+            <div class="form-grid">
+                <label class="field span-2">
+                    <span>Name <b class="req">*</b></span>
+                    <input class="input" @bind="_editing.Name" placeholder="e.g. Grilled chicken breast" />
+                </label>
+                <label class="field">
+                    <span>Category</span>
+                    <select class="input" @bind="_editing.Category">
+                        <option value="@FoodCategory.Food">Food</option>
+                        <option value="@FoodCategory.Beverage">Beverage</option>
+                        <option value="@FoodCategory.Snack">Snack</option>
+                    </select>
+                </label>
+                <label class="field">
+                    <span>Serving size</span>
+                    <input class="input" @bind="_editing.ServingSize" placeholder="e.g. 6 oz / 170 g" />
+                </label>
+                <label class="field span-2">
+                    <span>Description</span>
+                    <textarea class="input" rows="2" @bind="_editing.Description" placeholder="Optional notes"></textarea>
+                </label>
+                <label class="field">
+                    <span>Calories (kcal)</span>
+                    <input class="input" type="number" step="any" min="0" @bind="_editing.Calories" />
+                </label>
+            </div>
+
+            <h4 class="section-label">Macronutrients <span class="muted small">(per serving, optional)</span></h4>
+            <div class="form-grid nutrients-grid">
+                @foreach (var def in NutrientCatalog.Macros)
+                {
+                    <label class="field" @key="def.Key">
+                        <span>@def.Label (@def.Unit)</span>
+                        <input class="input" type="number" step="any" min="0"
+                               value="@NutrientValue(def.Key)"
+                               @onchange="e => SetNutrient(def.Key, e.Value?.ToString())" />
+                    </label>
+                }
+            </div>
+
+            <details class="micros-details" open="@_microsOpen">
+                <summary @onclick="() => _microsOpen = !_microsOpen" @onclick:preventDefault="true">
+                    Micronutrients <span class="muted small">(per serving, optional)</span>
+                </summary>
+                <div class="form-grid nutrients-grid">
+                    @foreach (var def in NutrientCatalog.Micros)
+                    {
+                        <label class="field" @key="def.Key">
+                            <span>@def.Label (@def.Unit)</span>
+                            <input class="input" type="number" step="any" min="0"
+                                   value="@NutrientValue(def.Key)"
+                                   @onchange="e => SetNutrient(def.Key, e.Value?.ToString())" />
+                        </label>
+                    }
+                </div>
+            </details>
+
+            <div class="btn-row modal-actions">
+                <button class="btn btn-accent" @onclick="SaveAsync">Save</button>
+                <button class="btn" @onclick="CancelEdit">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string _search = "";
+    private string _categoryFilter = "";
+    private string? _confirmDelete;
+
+    private FoodItem? _editing;
+    private string? _originalName;
+    private string? _error;
+    private bool _microsOpen;
+
+    protected override void OnInitialized() => State.Changed += OnChanged;
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+
+    private IEnumerable<FoodItem> Filtered()
+    {
+        var q = State.Data.Items.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search))
+            q = q.Where(i => i.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                          || (i.Description?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
+        if (Enum.TryParse<FoodCategory>(_categoryFilter, out var cat))
+            q = q.Where(i => i.Category == cat);
+        return q;
+    }
+
+    private static string FormatNutrient(FoodItem item, string key)
+    {
+        var v = item.Nutrient(key);
+        return v is null ? "—" : v.Value.ToString("0.#");
+    }
+
+    private void StartAdd()
+    {
+        _editing = new FoodItem();
+        _originalName = null;
+        _error = null;
+        _microsOpen = false;
+    }
+
+    private void StartEdit(FoodItem item)
+    {
+        _editing = item.Clone();
+        _originalName = item.Name;
+        _error = null;
+        _microsOpen = NutrientCatalog.Micros.Any(m => item.Nutrients.ContainsKey(m.Key));
+    }
+
+    private void CancelEdit()
+    {
+        _editing = null;
+        _error = null;
+    }
+
+    private string? NutrientValue(string key)
+    {
+        var v = _editing?.Nutrient(key);
+        return v?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private void SetNutrient(string key, string? raw)
+    {
+        if (_editing is null) return;
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            _editing.Nutrients[key] = v;
+        else
+            _editing.Nutrients.Remove(key);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is null) return;
+        _error = await State.UpsertItemAsync(_editing, _originalName);
+        if (_error is null) CancelEdit();
+    }
+
+    private async Task DeleteAsync(string name)
+    {
+        _confirmDelete = null;
+        await State.DeleteItemAsync(name);
+    }
+}

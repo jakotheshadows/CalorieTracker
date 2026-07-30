@@ -1,0 +1,78 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Publish
+        run: dotnet publish CalorieTracker.csproj -c Release -o out
+
+      - name: Rewrite base href for project-site subpath
+        run: |
+          REPO="${{ github.event.repository.name }}"
+          if [[ "$REPO" != *.github.io ]]; then
+            sed -i "s|<base href=\"/\" />|<base href=\"/$REPO/\" />|" out/wwwroot/index.html
+          fi
+
+      # index.html was modified after publish, so its SHA-256 in the service worker
+      # asset manifest no longer matches; fix it or the offline cache refuses to install.
+      - name: Fix service-worker integrity hash for index.html
+        run: |
+          python3 - <<'EOF'
+          import base64, hashlib, json, re
+
+          with open("out/wwwroot/index.html", "rb") as f:
+              digest = base64.b64encode(hashlib.sha256(f.read()).digest()).decode()
+
+          path = "out/wwwroot/service-worker-assets.js"
+          with open(path) as f:
+              js = f.read()
+
+          prefix = "self.assetsManifest = "
+          manifest = json.loads(js[len(prefix):].rstrip().rstrip(";"))
+          for asset in manifest["assets"]:
+              if asset["url"] == "index.html":
+                  asset["hash"] = f"sha256-{digest}"
+
+          with open(path, "w") as f:
+              f.write(prefix + json.dumps(manifest) + ";")
+          EOF
+
+      - name: SPA fallback + disable Jekyll
+        run: |
+          cp out/wwwroot/index.html out/wwwroot/404.html
+          touch out/wwwroot/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out/wwwroot
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

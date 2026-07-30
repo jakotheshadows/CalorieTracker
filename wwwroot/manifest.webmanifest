@@ -1,0 +1,24 @@
+{
+  "name": "CalTrack — Calorie Tracker",
+  "short_name": "CalTrack",
+  "id": "./",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#12161c",
+  "theme_color": "#12161c",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    }
+  ]
+}

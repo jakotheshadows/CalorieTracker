@@ -1,0 +1,77 @@
+@page "/"
+@implements IDisposable
+@inject AppState State
+@inject NavigationManager Nav
+
+<PageTitle>CalTrack — Home</PageTitle>
+
+<div class="page-header">
+    <h1>Today</h1>
+    <span class="muted">@DateTime.Today.ToString("dddd, MMMM d, yyyy")</span>
+</div>
+
+<div class="home-grid">
+    <TotalsPanel Title="Today's nutrition" Totals="@State.TotalsForDay(Today)" DayCount="1" />
+
+    <div class="card">
+        <h3>Today's plan</h3>
+        @{ var entries = State.GetDay(Today); }
+        @if (entries.Count == 0)
+        {
+            <p class="muted">No menu items scheduled for today.</p>
+            <div class="btn-row">
+                <button class="btn btn-accent" @onclick="@(() => Nav.NavigateTo("schedule"))">Open schedule</button>
+            </div>
+        }
+        else
+        {
+            <ul class="plain-list">
+                @foreach (var e in entries)
+                {
+                    var item = State.FindItem(e.ItemName);
+                    <li>
+                        <span>@e.ItemName <span class="muted">× @e.Servings.ToString("0.##")</span></span>
+                        <span class="num">@(item?.Calories is null ? "—" : ((item.Calories.Value * e.Servings).ToString("N0") + " kcal"))</span>
+                    </li>
+                }
+            </ul>
+            <div class="btn-row">
+                <button class="btn" @onclick="@(() => Nav.NavigateTo("schedule"))">Edit in schedule</button>
+            </div>
+        }
+    </div>
+
+    <div class="card">
+        <h3>This week</h3>
+        @{
+            var ws = AppState.WeekStart(Today);
+            var weekTotals = State.TotalsForRange(ws, ws.AddDays(6));
+        }
+        <div class="stat-row">
+            <div class="stat">
+                <span class="stat-value">@weekTotals.Calories.ToString("N0")</span>
+                <span class="stat-label">kcal planned</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value">@weekTotals.DaysWithEntries<span class="muted">/7</span></span>
+                <span class="stat-label">days planned</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value">@State.Data.Items.Count</span>
+                <span class="stat-label">menu items</span>
+            </div>
+        </div>
+        <div class="btn-row">
+            <button class="btn" @onclick="@(() => Nav.NavigateTo("foods"))">Manage menu items</button>
+            <button class="btn" @onclick="@(() => Nav.NavigateTo("schedule"))">Open schedule</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    protected override void OnInitialized() => State.Changed += OnChanged;
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+}

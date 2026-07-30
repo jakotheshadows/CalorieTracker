@@ -1,0 +1,468 @@
+@page "/schedule"
+@implements IDisposable
+@inject AppState State
+
+<PageTitle>CalTrack — Schedule</PageTitle>
+
+<div class="page-header">
+    <h1>Schedule</h1>
+    <div class="view-switch">
+        <button class="btn @(_view == ViewMode.Day ? "btn-accent" : "")" @onclick="() => _view = ViewMode.Day">Day</button>
+        <button class="btn @(_view == ViewMode.Week ? "btn-accent" : "")" @onclick="() => _view = ViewMode.Week">Week</button>
+        <button class="btn @(_view == ViewMode.Month ? "btn-accent" : "")" @onclick="() => _view = ViewMode.Month">Month</button>
+    </div>
+</div>
+
+<div class="toolbar">
+    <button class="btn" @onclick="() => Navigate(-1)">‹ Prev</button>
+    <button class="btn" @onclick="GoToday">Today</button>
+    <button class="btn" @onclick="() => Navigate(1)">Next ›</button>
+    <span class="range-label">@RangeLabel()</span>
+    <span class="spacer"></span>
+    <button class="btn btn-accent" @onclick="OpenRandomize">🎲 Randomize…</button>
+</div>
+
+<div class="sched-layout">
+    <div class="sched-main">
+        @if (_view == ViewMode.Day)
+        {
+            var entries = State.GetDay(_date);
+            <div class="card">
+                <h3>@_date.ToString("dddd, MMMM d")</h3>
+
+                @if (entries.Count == 0)
+                {
+                    <p class="muted">Nothing planned. Add items below or use Randomize.</p>
+                }
+                else
+                {
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th class="num">Servings</th>
+                                <th class="num">Calories</th>
+                                <th class="num">Protein</th>
+                                <th class="num">Carbs</th>
+                                <th class="num">Fat</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var entry in entries.ToList())
+                            {
+                                var item = State.FindItem(entry.ItemName);
+                                <tr @key="entry">
+                                    <td>
+                                        <span class="item-name">@entry.ItemName</span>
+                                        @if (item?.ServingSize is not null)
+                                        {
+                                            <span class="muted small"> · @item.ServingSize</span>
+                                        }
+                                        @if (item is null)
+                                        {
+                                            <span class="badge badge-warn">missing item</span>
+                                        }
+                                    </td>
+                                    <td class="num servings-cell">
+                                        <input class="input input-sm num" type="number" step="0.5" min="0"
+                                               value="@entry.Servings"
+                                               @onchange="e => OnServingsChanged(entry, e.Value?.ToString())" />
+                                    </td>
+                                    <td class="num">@(item?.Calories is null ? "—" : (item.Calories.Value * entry.Servings).ToString("N0"))</td>
+                                    <td class="num">@EntryMacro(item, "protein", entry.Servings)</td>
+                                    <td class="num">@EntryMacro(item, "carbs", entry.Servings)</td>
+                                    <td class="num">@EntryMacro(item, "fat", entry.Servings)</td>
+                                    <td class="actions">
+                                        <button class="btn btn-sm btn-ghost-danger" @onclick="() => State.RemoveEntryAsync(_date, entry)">✕</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+
+                <div class="add-entry-row">
+                    <select class="input" @bind="_addItemName">
+                        <option value="">— pick a menu item —</option>
+                        @foreach (var item in State.Data.Items)
+                        {
+                            <option value="@item.Name">@item.Name @(item.Calories is null ? "" : $"({item.Calories:N0} kcal)")</option>
+                        }
+                    </select>
+                    <input class="input input-sm num" type="number" step="0.5" min="0.5" @bind="_addServings" />
+                    <button class="btn btn-accent" disabled="@(string.IsNullOrEmpty(_addItemName))" @onclick="AddEntryAsync">Add</button>
+                    @if (entries.Count > 0)
+                    {
+                        <span class="spacer"></span>
+                        <button class="btn btn-ghost-danger" @onclick="() => State.ClearDayAsync(_date)">Clear day</button>
+                    }
+                </div>
+
+                <div class="template-row">
+                    @if (State.TemplateNames.Any())
+                    {
+                        <select class="input" @bind="_templateSel">
+                            <option value="">— day templates —</option>
+                            @foreach (var t in State.TemplateNames)
+                            {
+                                <option value="@t">@t</option>
+                            }
+                        </select>
+                        <button class="btn" disabled="@(_templateSel == "")" @onclick="ApplyTemplateAsync">Apply to this day</button>
+                        @if (_templateSel != "")
+                        {
+                            @if (_templateToDelete == _templateSel)
+                            {
+                                <button class="btn btn-sm btn-danger" @onclick="DeleteTemplateAsync">Confirm delete?</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-sm btn-ghost-danger" @onclick="() => _templateToDelete = _templateSel">Delete</button>
+                            }
+                        }
+                    }
+                    <span class="spacer"></span>
+                    @if (entries.Count > 0)
+                    {
+                        @if (_savingTemplate)
+                        {
+                            <input class="input template-name-input" placeholder="Template name"
+                                   @bind="_newTemplateName" @bind:event="oninput" />
+                            <button class="btn btn-accent btn-sm" disabled="@(string.IsNullOrWhiteSpace(_newTemplateName))" @onclick="SaveTemplateAsync">Save</button>
+                            <button class="btn btn-sm" @onclick="CancelSaveTemplate">Cancel</button>
+                        }
+                        else
+                        {
+                            <button class="btn" @onclick="StartSaveTemplate">💾 Save day as template</button>
+                        }
+                    }
+                </div>
+                @if (_templateError is not null)
+                {
+                    <div class="alert-error template-alert">@_templateError</div>
+                }
+            </div>
+        }
+        else if (_view == ViewMode.Week)
+        {
+            var ws = AppState.WeekStart(_date);
+            <div class="week-grid">
+                @for (var i = 0; i < 7; i++)
+                {
+                    var day = ws.AddDays(i);
+                    var entries = State.GetDay(day);
+                    var totals = State.TotalsForDay(day);
+                    <div class="card day-card @(day == Today ? "today" : "")" @onclick="() => OpenDay(day)">
+                        <div class="day-card-head">
+                            <span>@day.ToString("ddd d")</span>
+                            <span class="num muted">@(entries.Count == 0 ? "" : totals.Calories.ToString("N0") + " kcal")</span>
+                        </div>
+                        @if (entries.Count == 0)
+                        {
+                            <div class="muted small">—</div>
+                        }
+                        else
+                        {
+                            <ul class="mini-list">
+                                @foreach (var e in entries)
+                                {
+                                    <li>@e.ItemName <span class="muted">×@e.Servings.ToString("0.##")</span></li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            var first = new DateOnly(_date.Year, _date.Month, 1);
+            var gridStart = AppState.WeekStart(first);
+            <div class="card month-card">
+                <div class="month-grid">
+                    @foreach (var dow in new[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" })
+                    {
+                        <div class="month-dow">@dow</div>
+                    }
+                    @for (var i = 0; i < 42; i++)
+                    {
+                        var day = gridStart.AddDays(i);
+                        var inMonth = day.Month == _date.Month;
+                        var totals = State.TotalsForDay(day);
+                        <div class="month-cell @(inMonth ? "" : "outside") @(day == Today ? "today" : "")"
+                             @onclick="() => OpenDay(day)">
+                            <span class="month-daynum">@day.Day</span>
+                            @if (totals.EntryCount > 0)
+                            {
+                                <span class="month-kcal">@totals.Calories.ToString("N0")</span>
+                                <span class="month-items muted">@totals.EntryCount item@(totals.EntryCount == 1 ? "" : "s")</span>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <aside class="sched-side">
+        <TotalsPanel Title="@TotalsTitle()" Totals="@RangeTotals()" DayCount="@RangeDayCount()" />
+    </aside>
+</div>
+
+@if (_randOpen)
+{
+    <div class="modal-backdrop" @onclick="() => _randOpen = false">
+        <div class="modal-panel" @onclick:stopPropagation="true">
+            <h2>Randomize schedule</h2>
+            <p class="muted small">
+                Fills each day in the range with random menu items approximating your targets.
+                Only items with calories &gt; 0 are used. Calorie target is required; everything else is optional.
+            </p>
+
+            @if (_randError is not null)
+            {
+                <div class="alert-error">@_randError</div>
+            }
+            @if (_randDone)
+            {
+                <div class="alert-ok">Schedule generated!</div>
+            }
+
+            <div class="form-grid">
+                <label class="field">
+                    <span>From</span>
+                    <input class="input" type="date" @bind="_randStart" />
+                </label>
+                <label class="field">
+                    <span>To</span>
+                    <input class="input" type="date" @bind="_randEnd" />
+                </label>
+                <label class="field">
+                    <span>Calories / day <b class="req">*</b></span>
+                    <input class="input" type="number" step="any" min="1" @bind="_targets.Calories" />
+                </label>
+                <label class="field">
+                    <span>Tolerance (±%)</span>
+                    <input class="input" type="number" step="any" min="1" max="50" @bind="_targets.TolerancePercent" />
+                </label>
+                <label class="field">
+                    <span>Items per day (min)</span>
+                    <input class="input" type="number" min="1" max="12" @bind="_targets.MinItemsPerDay" />
+                </label>
+                <label class="field">
+                    <span>Items per day (max)</span>
+                    <input class="input" type="number" min="1" max="12" @bind="_targets.MaxItemsPerDay" />
+                </label>
+                <label class="field">
+                    <span>Max servings per item</span>
+                    <input class="input" type="number" min="1" max="10" @bind="_targets.MaxServingsPerItem" />
+                </label>
+                <label class="field checkbox-field">
+                    <input type="checkbox" @bind="_randOverwrite" />
+                    <span>Overwrite days that already have a plan</span>
+                </label>
+            </div>
+
+            <h4 class="section-label">Macro targets / day <span class="muted small">(optional)</span></h4>
+            <div class="form-grid nutrients-grid">
+                @foreach (var def in NutrientCatalog.Macros)
+                {
+                    <label class="field" @key="def.Key">
+                        <span>@def.Label (@def.Unit)</span>
+                        <input class="input" type="number" step="any" min="0"
+                               value="@TargetValue(def.Key)"
+                               @onchange="e => SetTarget(def.Key, e.Value?.ToString())" />
+                    </label>
+                }
+            </div>
+
+            <details class="micros-details">
+                <summary>Micronutrient targets / day <span class="muted small">(optional)</span></summary>
+                <div class="form-grid nutrients-grid">
+                    @foreach (var def in NutrientCatalog.Micros)
+                    {
+                        <label class="field" @key="def.Key">
+                            <span>@def.Label (@def.Unit)</span>
+                            <input class="input" type="number" step="any" min="0"
+                                   value="@TargetValue(def.Key)"
+                                   @onchange="e => SetTarget(def.Key, e.Value?.ToString())" />
+                        </label>
+                    }
+                </div>
+            </details>
+
+            <div class="btn-row modal-actions">
+                <button class="btn btn-accent" @onclick="RunRandomizeAsync">Generate</button>
+                <button class="btn" @onclick="() => _randOpen = false">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private enum ViewMode { Day, Week, Month }
+
+    private ViewMode _view = ViewMode.Day;
+    private DateOnly _date = DateOnly.FromDateTime(DateTime.Today);
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    private string _addItemName = "";
+    private double _addServings = 1;
+
+    private string _templateSel = "";
+    private string? _templateToDelete;
+    private bool _savingTemplate;
+    private string _newTemplateName = "";
+    private string? _templateError;
+
+    private bool _randOpen;
+    private bool _randOverwrite;
+    private bool _randDone;
+    private string? _randError;
+    private DateOnly _randStart = Today;
+    private DateOnly _randEnd = Today;
+    private RandomTargets _targets = new();
+
+    protected override void OnInitialized() => State.Changed += OnChanged;
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+
+    private void GoToday() => _date = Today;
+
+    private void Navigate(int direction)
+    {
+        _date = _view switch
+        {
+            ViewMode.Day => _date.AddDays(direction),
+            ViewMode.Week => _date.AddDays(7 * direction),
+            _ => _date.AddMonths(direction),
+        };
+    }
+
+    private void OpenDay(DateOnly day)
+    {
+        _date = day;
+        _view = ViewMode.Day;
+    }
+
+    private (DateOnly Start, DateOnly End) VisibleRange() => _view switch
+    {
+        ViewMode.Day => (_date, _date),
+        ViewMode.Week => (AppState.WeekStart(_date), AppState.WeekStart(_date).AddDays(6)),
+        _ => (new DateOnly(_date.Year, _date.Month, 1),
+              new DateOnly(_date.Year, _date.Month, DateTime.DaysInMonth(_date.Year, _date.Month))),
+    };
+
+    private string RangeLabel() => _view switch
+    {
+        ViewMode.Day => _date.ToString("MMM d, yyyy"),
+        ViewMode.Week => $"{AppState.WeekStart(_date):MMM d} – {AppState.WeekStart(_date).AddDays(6):MMM d, yyyy}",
+        _ => _date.ToString("MMMM yyyy"),
+    };
+
+    private string TotalsTitle() => _view switch
+    {
+        ViewMode.Day => "Day totals",
+        ViewMode.Week => "Week totals",
+        _ => "Month totals",
+    };
+
+    private Totals RangeTotals()
+    {
+        var (start, end) = VisibleRange();
+        return State.TotalsForRange(start, end);
+    }
+
+    private int RangeDayCount()
+    {
+        var (start, end) = VisibleRange();
+        return end.DayNumber - start.DayNumber + 1;
+    }
+
+    private async Task AddEntryAsync()
+    {
+        if (string.IsNullOrEmpty(_addItemName) || _addServings <= 0) return;
+        await State.AddEntryAsync(_date, _addItemName, _addServings);
+        _addItemName = "";
+        _addServings = 1;
+    }
+
+    private static string EntryMacro(FoodItem? item, string key, double servings)
+    {
+        var v = item?.Nutrient(key);
+        return v is null ? "—" : (v.Value * servings).ToString("0.#");
+    }
+
+    private void StartSaveTemplate()
+    {
+        _savingTemplate = true;
+        _newTemplateName = "";
+        _templateError = null;
+    }
+
+    private void CancelSaveTemplate()
+    {
+        _savingTemplate = false;
+        _templateError = null;
+    }
+
+    private async Task SaveTemplateAsync()
+    {
+        _templateError = await State.SaveTemplateAsync(_newTemplateName, State.GetDay(_date));
+        if (_templateError is null)
+        {
+            _templateSel = _newTemplateName.Trim();
+            _savingTemplate = false;
+        }
+    }
+
+    private async Task ApplyTemplateAsync()
+    {
+        if (_templateSel == "") return;
+        _templateError = await State.ApplyTemplateAsync(_date, _templateSel);
+    }
+
+    private async Task DeleteTemplateAsync()
+    {
+        await State.DeleteTemplateAsync(_templateToDelete!);
+        _templateToDelete = null;
+        _templateSel = "";
+    }
+
+    private async Task OnServingsChanged(ScheduleEntry entry, string? raw)
+    {
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            await State.UpdateServingsAsync(_date, entry, v);
+    }
+
+    private void OpenRandomize()
+    {
+        var (start, end) = VisibleRange();
+        _randStart = start;
+        _randEnd = end;
+        _randError = null;
+        _randDone = false;
+        _randOpen = true;
+    }
+
+    private string? TargetValue(string key) =>
+        _targets.NutrientTargets.TryGetValue(key, out var v)
+            ? v.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : null;
+
+    private void SetTarget(string key, string? raw)
+    {
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v) && v > 0)
+            _targets.NutrientTargets[key] = v;
+        else
+            _targets.NutrientTargets.Remove(key);
+    }
+
+    private async Task RunRandomizeAsync()
+    {
+        _randDone = false;
+        _randError = await State.RandomizeRangeAsync(_randStart, _randEnd, _targets, _randOverwrite);
+        _randDone = _randError is null;
+    }
+}
