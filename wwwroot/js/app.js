@@ -60,8 +60,22 @@ window.calTracker = {
             }
         },
 
+        // Returns true if a force-update was started (page will reload via controllerchange).
         applyUpdate: function () {
-            if (this.reg && this.reg.waiting) this.reg.waiting.postMessage("SKIP_WAITING");
+            if (!this.reg) return false;
+            if (this.reg.waiting) {
+                this.reg.waiting.postMessage("SKIP_WAITING");
+                return true;
+            }
+            // New worker still downloading: queue the skip for when it finishes installing.
+            const incoming = this.reg.installing;
+            if (incoming) {
+                incoming.addEventListener("statechange", () => {
+                    if (this.reg.waiting) this.reg.waiting.postMessage("SKIP_WAITING");
+                });
+                return true;
+            }
+            return false;
         },
     },
 

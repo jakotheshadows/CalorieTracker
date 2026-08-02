@@ -405,6 +405,17 @@ textarea.input { resize: vertical; }
 }
 .update-status { align-self: center; }
 
+.spinner {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ---------- File input as button ---------- */
 
 .file-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; }

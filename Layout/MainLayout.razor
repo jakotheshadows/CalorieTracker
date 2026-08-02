@@ -21,15 +21,24 @@
     @if (_updateAvailable)
     {
         <div class="update-toast">
-            <span>✨ A new version of CalTrack is ready.</span>
-            <button class="btn btn-accent btn-sm" @onclick="ApplyUpdateAsync">Update now</button>
-            <button class="btn btn-sm" @onclick="() => _updateAvailable = false">Later</button>
+            @if (_updating)
+            {
+                <span class="spinner"></span>
+                <span>Updating CalTrack… the app will reload in a moment.</span>
+            }
+            else
+            {
+                <span>✨ A new version of CalTrack is ready.</span>
+                <button class="btn btn-accent btn-sm" @onclick="ApplyUpdateAsync">Update now</button>
+                <button class="btn btn-sm" @onclick="() => _updateAvailable = false">Later</button>
+            }
         </div>
     }
 </div>
 
 @code {
     private bool _updateAvailable;
+    private bool _updating;
     private DotNetObjectReference<MainLayout>? _selfRef;
 
     protected override async Task OnInitializedAsync()
@@ -54,8 +63,17 @@
         InvokeAsync(StateHasChanged);
     }
 
-    private async Task ApplyUpdateAsync() =>
-        await JS.InvokeVoidAsync("calTracker.updates.applyUpdate");
+    private async Task ApplyUpdateAsync()
+    {
+        _updating = true;
+        var started = await JS.InvokeAsync<bool>("calTracker.updates.applyUpdate");
+        if (!started)
+        {
+            // Nothing to apply after all (stale banner) — hide it.
+            _updating = false;
+            _updateAvailable = false;
+        }
+    }
 
     private void OnChanged() => InvokeAsync(StateHasChanged);
 
