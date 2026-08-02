@@ -152,6 +152,34 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
 .btn-ghost-danger:hover:not(:disabled) { background: rgba(224, 102, 102, .12); border-color: var(--danger); }
 .btn-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
 
+.coffee-btn {
+    background: #ffdd00;
+    border-color: #ffdd00;
+    color: #1a1408;
+    font-weight: 600;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+}
+.coffee-btn:hover { background: #e8c900; border-color: #e8c900; color: #1a1408; }
+
+.coffee-chip {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    background: #ffdd00;
+    color: #1a1408;
+    font-weight: 600;
+    font-size: .85rem;
+    padding: .35rem .8rem;
+    border-radius: 999px;
+    text-decoration: none;
+    transition: background .12s, transform .12s;
+}
+.coffee-chip:hover { background: #e8c900; color: #1a1408; transform: translateY(-1px); }
+
 .input {
     background: var(--bg);
     color: var(--text);
@@ -499,5 +527,6 @@ textarea.input { resize: vertical; }
 
 @media (max-width: 640px) {
     .page-main { padding: .75rem; }
-    .sync-chip .chip-text { display: none; }
+    .coffee-chip .coffee-text { display: none; }
+    .coffee-chip { padding: .35rem .5rem; }
 }
