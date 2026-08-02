@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject AppState State
+@inject IJSRuntime JS
 
 <div class="app-shell">
     <header class="topbar">
@@ -16,16 +17,51 @@
     <main class="page-main">
         @Body
     </main>
+
+    @if (_updateAvailable)
+    {
+        <div class="update-toast">
+            <span>✨ A new version of CalTrack is ready.</span>
+            <button class="btn btn-accent btn-sm" @onclick="ApplyUpdateAsync">Update now</button>
+            <button class="btn btn-sm" @onclick="() => _updateAvailable = false">Later</button>
+        </div>
+    }
 </div>
 
 @code {
+    private bool _updateAvailable;
+    private DotNetObjectReference<MainLayout>? _selfRef;
+
     protected override async Task OnInitializedAsync()
     {
         State.Changed += OnChanged;
         await State.EnsureLoadedAsync();
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("calTracker.updates.init", _selfRef);
+        }
+    }
+
+    [JSInvokable]
+    public void OnUpdateAvailable()
+    {
+        _updateAvailable = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ApplyUpdateAsync() =>
+        await JS.InvokeVoidAsync("calTracker.updates.applyUpdate");
+
     private void OnChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => State.Changed -= OnChanged;
+    public void Dispose()
+    {
+        State.Changed -= OnChanged;
+        _selfRef?.Dispose();
+    }
 }

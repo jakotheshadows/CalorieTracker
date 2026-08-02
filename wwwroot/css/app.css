@@ -375,6 +375,27 @@ textarea.input { resize: vertical; }
 .month-kcal { font-weight: 600; color: var(--accent); font-size: .9rem; }
 .month-items { font-size: .7rem; }
 
+/* ---------- Update toast ---------- */
+
+.update-toast {
+    position: fixed;
+    bottom: 1.25rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    background: var(--bg-3);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: .6rem 1rem;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+    z-index: 200;
+    max-width: calc(100vw - 2rem);
+    flex-wrap: wrap;
+}
+.update-status { align-self: center; }
+
 /* ---------- File input as button ---------- */
 
 .file-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; }

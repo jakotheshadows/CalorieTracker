@@ -1,6 +1,7 @@
 @page "/settings"
 @inject AppState State
 @inject LocalStore Store
+@inject IJSRuntime JS
 
 <PageTitle>CalTrack — Settings</PageTitle>
 
@@ -36,6 +37,21 @@
     </div>
 
     <div class="card">
+        <h3>App updates</h3>
+        <p class="muted small">
+            Updates install automatically in the background; when one is ready, a banner appears
+            with an “Update now” button. You can also check on demand here.
+        </p>
+        <div class="btn-row">
+            <button class="btn" disabled="@_checkingUpdate" @onclick="CheckUpdatesAsync">Check for updates</button>
+            @if (_updateStatus is not null)
+            {
+                <span class="muted small update-status">@_updateStatus</span>
+            }
+        </div>
+
+        <hr class="sep" />
+
         <h3>Danger zone</h3>
         @if (_confirmClear)
         {
@@ -58,6 +74,22 @@
     private string? _importError;
     private bool _importOk;
     private bool _confirmClear;
+    private bool _checkingUpdate;
+    private string? _updateStatus;
+
+    private async Task CheckUpdatesAsync()
+    {
+        _checkingUpdate = true;
+        _updateStatus = "Checking…";
+        var found = await JS.InvokeAsync<bool?>("calTracker.updates.checkNow");
+        _updateStatus = found switch
+        {
+            true => "Update found — it's downloading; the update banner will appear shortly.",
+            false => "You're on the latest version.",
+            _ => "Couldn't check for updates (offline?).",
+        };
+        _checkingUpdate = false;
+    }
 
     private async Task ExportAsync() =>
         await Store.DownloadFileAsync($"caltrack-export-{DateTime.Now:yyyyMMdd}.json", State.ExportJson());
