@@ -32,6 +32,7 @@ jobs:
           REPO="${{ github.event.repository.name }}"
           if [[ "$REPO" != *.github.io ]]; then
             sed -i "s|<base href=\"/\" />|<base href=\"/$REPO/\" />|" out/wwwroot/index.html
+            sed -i "s|const base = \"/\";|const base = \"/$REPO/\";|" out/wwwroot/service-worker.js
           fi
 
       # index.html was modified after publish, so its SHA-256 in the service worker
