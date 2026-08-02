@@ -7,7 +7,10 @@ self.addEventListener('activate', event => event.waitUntil(onActivate(event)));
 self.addEventListener('fetch', event => event.respondWith(onFetch(event)));
 self.addEventListener('message', event => { if (event.data === 'SKIP_WAITING') self.skipWaiting(); });
 
-const cacheNamePrefix = 'offline-cache-';
+// App-specific prefix: the Cache API is origin-wide, so a generic prefix would let
+// another PWA hosted on this github.io origin delete our cache during its activation.
+const cacheNamePrefix = 'caltrack-cache-';
+const legacyCachePrefix = 'offline-cache-';
 const cacheName = `${cacheNamePrefix}${self.assetsManifest.version}`;
 const offlineAssetsInclude = [ /\.dll$/, /\.pdb$/, /\.wasm/, /\.html/, /\.js$/, /\.json$/, /\.css$/, /\.woff$/, /\.png$/, /\.jpe?g$/, /\.gif$/, /\.ico$/, /\.blat$/, /\.dat$/ ];
 const offlineAssetsExclude = [ /^service-worker\.js$/ ];
@@ -31,10 +34,10 @@ async function onInstall(event) {
 async function onActivate(event) {
     console.info('Service worker: Activate');
 
-    // Delete unused caches
+    // Delete unused caches (including ones under the pre-rename legacy prefix)
     const cacheKeys = await caches.keys();
     await Promise.all(cacheKeys
-        .filter(key => key.startsWith(cacheNamePrefix) && key !== cacheName)
+        .filter(key => (key.startsWith(cacheNamePrefix) && key !== cacheName) || key.startsWith(legacyCachePrefix))
         .map(key => caches.delete(key)));
 }
 
