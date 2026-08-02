@@ -270,6 +270,15 @@ textarea.input { resize: vertical; }
     margin-bottom: .75rem;
     font-size: .85rem;
 }
+.alert-warn {
+    background: rgba(224, 179, 76, .12);
+    border: 1px solid var(--warn);
+    color: #ecd9a8;
+    border-radius: 8px;
+    padding: .5rem .75rem;
+    margin-bottom: .75rem;
+    font-size: .85rem;
+}
 .alert-ok {
     background: rgba(70, 192, 122, .12);
     border: 1px solid var(--accent);

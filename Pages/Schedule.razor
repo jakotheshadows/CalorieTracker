@@ -233,9 +233,10 @@
         <div class="modal-panel" @onclick:stopPropagation="true">
             <h2>Randomize schedule</h2>
             <p class="muted small">
-                Fills each day in the range with random menu items approximating your targets.
-                Only items with calories &gt; 0 that aren't marked “exclude from randomize” are used.
-                Calorie target is required; everything else is optional.
+                Fills each day in the range with random menu items. The calorie target is a daily
+                <b>cap</b> (tolerance sets how far a day may go over it); macro/micro targets are
+                daily <b>minimums</b>. Only items with calories &gt; 0 that aren't marked
+                “exclude from randomize” are used.
                 <b>@State.Data.Items.Count(AppState.IsRandomEligible)</b> of @State.Data.Items.Count menu items are eligible.
             </p>
 
@@ -246,6 +247,10 @@
             @if (_randDone)
             {
                 <div class="alert-ok">Schedule generated!</div>
+            }
+            @if (_randWarning is not null)
+            {
+                <div class="alert-warn">@_randWarning</div>
             }
 
             <div class="form-grid">
@@ -340,6 +345,7 @@
     private bool _randOverwrite;
     private bool _randDone;
     private string? _randError;
+    private string? _randWarning;
     private DateOnly _randStart = Today;
     private DateOnly _randEnd = Today;
     private RandomTargets _targets = new();
@@ -479,6 +485,7 @@
         _randStart = start;
         _randEnd = end;
         _randError = null;
+        _randWarning = null;
         _randDone = false;
         _randOpen = true;
     }
@@ -499,7 +506,7 @@
     private async Task RunRandomizeAsync()
     {
         _randDone = false;
-        _randError = await State.RandomizeRangeAsync(_randStart, _randEnd, _targets, _randOverwrite);
+        (_randError, _randWarning) = await State.RandomizeRangeAsync(_randStart, _randEnd, _targets, _randOverwrite);
         _randDone = _randError is null;
     }
 }
