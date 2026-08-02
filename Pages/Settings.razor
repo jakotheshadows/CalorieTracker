@@ -38,6 +38,7 @@
 
     <div class="card">
         <h3>App updates</h3>
+        <p class="muted small">Installed version: <code>@(_version ?? "…")</code></p>
         <p class="muted small">
             Updates install automatically in the background; when one is ready, a banner appears
             with an “Update now” button. You can also check on demand here.
@@ -76,6 +77,10 @@
     private bool _confirmClear;
     private bool _checkingUpdate;
     private string? _updateStatus;
+    private string? _version;
+
+    protected override async Task OnInitializedAsync() =>
+        _version = await JS.InvokeAsync<string>("calTracker.getVersion");
 
     private async Task CheckUpdatesAsync()
     {

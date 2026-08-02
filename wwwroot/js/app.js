@@ -65,6 +65,9 @@ window.calTracker = {
         },
     },
 
+    getVersion: () =>
+        document.querySelector('meta[name="app-version"]')?.content || "dev",
+
     downloadFile: (fileName, content) => {
         const blob = new Blob([content], { type: "application/json" });
         const url = URL.createObjectURL(blob);

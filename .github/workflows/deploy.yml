@@ -35,6 +35,11 @@ jobs:
             sed -i "s|const base = \"/\";|const base = \"/$REPO/\";|" out/wwwroot/service-worker.js
           fi
 
+      - name: Stamp build version into index.html
+        run: |
+          VERSION="${GITHUB_SHA::7} ($(date -u +%Y-%m-%d))"
+          sed -i "s|<meta name=\"app-version\" content=\"dev\" />|<meta name=\"app-version\" content=\"$VERSION\" />|" out/wwwroot/index.html
+
       # index.html was modified after publish, so its SHA-256 in the service worker
       # asset manifest no longer matches; fix it or the offline cache refuses to install.
       - name: Fix service-worker integrity hash for index.html
