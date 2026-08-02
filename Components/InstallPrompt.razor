@@ -1,0 +1,139 @@
+@* Invites browser users to install the PWA and walks them through it with illustrated,
+   per-browser steps. Renders nothing when already running as an installed app. *@
+@inject IJSRuntime JS
+@inject LocalStore Store
+
+@if (_visible)
+{
+    <div class="card install-card">
+        <div class="install-row">
+            <div>
+                <h3>📲 Install CalTrack as an app</h3>
+                <p class="muted small">
+                    Own icon, its own window, works fully offline — no app store needed.
+                </p>
+            </div>
+            <div class="btn-row install-actions">
+                <button class="btn btn-accent" @onclick="() => _howOpen = true">Show me how</button>
+                @if (!Compact)
+                {
+                    <button class="btn btn-sm" title="Hide this" @onclick="DismissAsync">✕</button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@if (_howOpen)
+{
+    <div class="modal-backdrop" @onclick="() => _howOpen = false">
+        <div class="modal-panel" @onclick:stopPropagation="true">
+            <h2>Install CalTrack</h2>
+            <p class="muted small">Pick your device — it takes about ten seconds.</p>
+
+            <div class="view-switch install-tabs">
+                <button class="btn @(_tab == "desktop" ? "btn-accent" : "")" @onclick=@(() => _tab = "desktop")>Computer</button>
+                <button class="btn @(_tab == "android" ? "btn-accent" : "")" @onclick=@(() => _tab = "android")>Android</button>
+                <button class="btn @(_tab == "ios" ? "btn-accent" : "")" @onclick=@(() => _tab = "ios")>iPhone / iPad</button>
+            </div>
+
+            @if (_tab == "desktop")
+            {
+                <svg class="howto-svg" viewBox="0 0 420 96" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Browser address bar with the install icon on the right">
+                    <rect x="4" y="26" width="412" height="40" rx="20" fill="#1a2028" stroke="#2f3a47" />
+                    <circle cx="30" cy="46" r="9" fill="none" stroke="#98a4b3" stroke-width="2" />
+                    <text x="52" y="51" fill="#98a4b3" font-size="14" font-family="Segoe UI, sans-serif">jakotheshadows.github.io/CalorieTracker</text>
+                    <g transform="translate(374, 34)">
+                        <rect x="0" y="0" width="24" height="17" rx="2.5" fill="none" stroke="#46c07a" stroke-width="2.4" />
+                        <path d="M12 4 v7 M8.5 8 l3.5 3.5 3.5 -3.5" fill="none" stroke="#46c07a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+                        <rect x="7" y="19.5" width="10" height="2.6" rx="1.3" fill="#46c07a" />
+                    </g>
+                    <circle cx="386" cy="46" r="19" fill="none" stroke="#46c07a" stroke-width="2" stroke-dasharray="4 3" />
+                </svg>
+                <ol class="howto-steps">
+                    <li>In <b>Chrome</b> or <b>Edge</b>, look at the <b>right end of the address bar</b> for the install icon (a screen with a down arrow, circled above).</li>
+                    <li>Click it, then click <b>Install</b>.</li>
+                    <li>CalTrack opens in its own window and appears in your Start menu / taskbar like any app.</li>
+                </ol>
+                <p class="muted small">No icon? Open the browser's <b>⋮ / ⋯ menu</b> — the option is called <b>“Install CalTrack”</b> (Chrome: under “Cast, save, and share”; Edge: under “Apps”). Firefox doesn't support installing apps on desktop — use Chrome or Edge for the install.</p>
+            }
+            else if (_tab == "android")
+            {
+                <svg class="howto-svg howto-svg-tall" viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Android browser menu with the Install app entry highlighted">
+                    <rect x="60" y="8" width="180" height="134" rx="12" fill="#1a2028" stroke="#2f3a47" />
+                    <rect x="72" y="20" width="156" height="22" rx="11" fill="#232b36" />
+                    <circle cx="216" cy="31" r="1.8" fill="#e7ebf0" /><circle cx="216" cy="26" r="1.8" fill="#e7ebf0" /><circle cx="216" cy="36" r="1.8" fill="#e7ebf0" />
+                    <rect x="150" y="46" width="180" height="88" rx="8" fill="#232b36" stroke="#2f3a47" />
+                    <rect x="158" y="56" width="120" height="8" rx="4" fill="#3a4757" />
+                    <rect x="158" y="72" width="100" height="8" rx="4" fill="#3a4757" />
+                    <rect x="154" y="88" width="172" height="22" rx="6" fill="rgba(70,192,122,.15)" stroke="#46c07a" />
+                    <text x="163" y="103" fill="#46c07a" font-size="12" font-weight="600" font-family="Segoe UI, sans-serif">⊕ Install app</text>
+                    <rect x="158" y="118" width="110" height="8" rx="4" fill="#3a4757" />
+                </svg>
+                <ol class="howto-steps">
+                    <li>Open CalTrack in <b>Chrome</b> on your phone.</li>
+                    <li>Tap the <b>⋮ menu</b> (top-right corner).</li>
+                    <li>Tap <b>“Install app”</b> (older versions: “Add to Home screen”), then confirm.</li>
+                    <li>The 🥗 icon lands on your home screen and opens full-screen.</li>
+                </ol>
+            }
+            else
+            {
+                <svg class="howto-svg howto-svg-tall" viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Safari share button and the Add to Home Screen menu entry">
+                    <rect x="24" y="104" width="180" height="34" rx="10" fill="#1a2028" stroke="#2f3a47" />
+                    <text x="40" y="126" fill="#98a4b3" font-size="13" font-family="Segoe UI, sans-serif">‹    ›</text>
+                    <g transform="translate(102, 109)">
+                        <rect x="0" y="8" width="20" height="16" rx="3" fill="none" stroke="#46c07a" stroke-width="2.2" />
+                        <path d="M10 14 V1 M5.5 5.5 L10 1 l4.5 4.5" fill="none" stroke="#46c07a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+                    </g>
+                    <circle cx="112" cy="122" r="17" fill="none" stroke="#46c07a" stroke-width="2" stroke-dasharray="4 3" />
+                    <text x="150" y="126" fill="#98a4b3" font-size="13" font-family="Segoe UI, sans-serif">⧉</text>
+                    <path d="M140 96 C 180 60, 210 60, 240 74" fill="none" stroke="#46c07a" stroke-width="2" stroke-dasharray="5 4" marker-end="none" />
+                    <rect x="216" y="30" width="188" height="60" rx="10" fill="#232b36" stroke="#2f3a47" />
+                    <rect x="224" y="40" width="120" height="8" rx="4" fill="#3a4757" />
+                    <rect x="220" y="56" width="180" height="24" rx="6" fill="rgba(70,192,122,.15)" stroke="#46c07a" />
+                    <text x="229" y="72" fill="#46c07a" font-size="12" font-weight="600" font-family="Segoe UI, sans-serif">Add to Home Screen  ⊞</text>
+                </svg>
+                <ol class="howto-steps">
+                    <li>Open CalTrack in <b>Safari</b>.</li>
+                    <li>Tap the <b>Share</b> button (the square with an arrow, circled above — bottom bar on iPhone, top bar on iPad).</li>
+                    <li>Scroll the sheet and tap <b>“Add to Home Screen”</b>, then tap <b>Add</b>.</li>
+                    <li>The 🥗 icon appears on your home screen and opens full-screen. (Bonus: home-screen apps are exempt from Safari's storage cleanup.)</li>
+                </ol>
+            }
+
+            <div class="btn-row modal-actions">
+                <button class="btn" @onclick="() => _howOpen = false">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>Compact mode (Settings): never dismissible, ignores the dismissed flag.</summary>
+    [Parameter] public bool Compact { get; set; }
+
+    private const string DismissedKey = "caltrack-install-dismissed";
+
+    private bool _visible;
+    private bool _howOpen;
+    private string _tab = "desktop";
+
+    private record InstallState(bool Standalone, string Platform);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        var state = await JS.InvokeAsync<InstallState>("calTracker.install.getState");
+        _tab = state.Platform is "ios" or "android" ? state.Platform : "desktop";
+        var dismissed = !Compact && await Store.GetAsync(DismissedKey) == "1";
+        _visible = !state.Standalone && !dismissed;
+        StateHasChanged();
+    }
+
+    private async Task DismissAsync()
+    {
+        _visible = false;
+        await Store.SetAsync(DismissedKey, "1");
+    }
+}

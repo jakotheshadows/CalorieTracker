@@ -257,6 +257,23 @@ textarea.input { resize: vertical; }
 .section-label { margin: 1rem 0 .5rem; font-size: .9rem; }
 .nutrients-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 
+/* ---------- Install prompt ---------- */
+
+.install-card { border-color: rgba(70, 192, 122, .45); }
+.install-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+.install-row h3 { margin-bottom: .25rem; }
+.install-row p { margin: 0; }
+.install-actions { margin-top: 0; align-items: center; }
+.install-tabs { margin: .75rem 0 1rem; }
+.howto-svg { width: 100%; max-width: 420px; display: block; margin: 0 auto .75rem; }
+.howto-steps { padding-left: 1.2rem; line-height: 1.8; font-size: .92rem; }
+
 /* ---------- USDA lookup ---------- */
 
 .name-row { display: flex; gap: .5rem; }

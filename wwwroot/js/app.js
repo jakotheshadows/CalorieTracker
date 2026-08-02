@@ -82,6 +82,28 @@ window.calTracker = {
     getVersion: () =>
         document.querySelector('meta[name="app-version"]')?.content || "dev",
 
+    // PWA install helper: same walkthrough-based experience in every browser.
+    install: {
+        // True when running as an installed app (its own window / home-screen launch).
+        isStandalone: function () {
+            return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+        },
+
+        // Which walkthrough fits this device/browser.
+        platform: function () {
+            const ua = navigator.userAgent;
+            const ios = /iPhone|iPad|iPod/.test(ua) ||
+                (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+            if (ios) return "ios";
+            if (/Android/.test(ua)) return "android";
+            return /Firefox/.test(ua) ? "firefox" : "desktop";
+        },
+
+        getState: function () {
+            return { standalone: this.isStandalone(), platform: this.platform() };
+        },
+    },
+
     downloadFile: (fileName, content) => {
         const blob = new Blob([content], { type: "application/json" });
         const url = URL.createObjectURL(blob);
