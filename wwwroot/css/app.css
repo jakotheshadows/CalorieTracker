@@ -164,8 +164,24 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
 }
 .coffee-btn:hover { background: #e8c900; border-color: #e8c900; color: #1a1408; }
 
-.coffee-chip {
+.about-chip {
     margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: .85rem;
+    padding: .3rem .8rem;
+    border-radius: 999px;
+    text-decoration: none;
+    transition: color .12s, border-color .12s, transform .12s;
+}
+.about-chip:hover { color: var(--text); border-color: var(--accent); transform: translateY(-1px); }
+
+.coffee-chip {
     display: inline-flex;
     align-items: center;
     gap: .4rem;
@@ -544,6 +560,6 @@ textarea.input { resize: vertical; }
 
 @media (max-width: 640px) {
     .page-main { padding: .75rem; }
-    .coffee-chip .coffee-text { display: none; }
-    .coffee-chip { padding: .35rem .5rem; }
+    .coffee-chip .coffee-text, .about-chip .about-text { display: none; }
+    .coffee-chip, .about-chip { padding: .35rem .5rem; }
 }
