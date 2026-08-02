@@ -163,6 +163,21 @@ else
                         {
                             <div class="alert-ok">@_usdaApplied</div>
                         }
+                        @if (_usdaSelected is not null)
+                        {
+                            <div class="usda-serving-row">
+                                <span class="muted small">My serving is:</span>
+                                <input class="input input-sm serving-amount" type="number" step="any" min="0"
+                                       value="@_servAmount" @onchange="e => OnServingAmountChanged(e.Value?.ToString())" />
+                                <select class="input serving-unit" value="@_servUnit" @onchange="e => OnServingUnitChanged(e.Value?.ToString())">
+                                    @foreach (var unit in UsdaService.UnitsForBase(_usdaSelected.BaseUnit))
+                                    {
+                                        <option value="@unit">@unit</option>
+                                    }
+                                </select>
+                                <span class="muted small">— nutrition below rescales automatically</span>
+                            </div>
+                        }
                         @if (_usdaResults is not null)
                         {
                             @if (_usdaResults.Count == 0)
@@ -177,9 +192,9 @@ else
                                         <li @key="f.FdcId" @onclick="() => ApplyUsda(f)" title="Click to fill the form with this food's nutrition">
                                             <div class="usda-line1">
                                                 <span class="item-name">@f.Description</span>
-                                                <span class="num">@(f.Calories is null ? "—" : $"{f.Calories:N0} kcal")</span>
+                                                <span class="num">@(f.CaloriesFor(f.DefaultAmount) is { } kcal ? $"{kcal:N0} kcal" : "—")</span>
                                             </div>
-                                            <div class="muted small">@(f.Brand is null ? f.DataType : $"{f.Brand} · {f.DataType}") · per @f.ServingText</div>
+                                            <div class="muted small">@(f.Brand is null ? f.DataType : $"{f.Brand} · {f.DataType}") · per @f.DefaultServingDisplay</div>
                                         </li>
                                     }
                                 </ul>
@@ -245,6 +260,9 @@ else
     private string? _usdaError;
     private string? _usdaApplied;
     private List<UsdaFood>? _usdaResults;
+    private UsdaFood? _usdaSelected;
+    private double _servAmount;
+    private string _servUnit = "g";
 
     protected override void OnInitialized() => State.Changed += OnChanged;
     private void OnChanged() => InvokeAsync(StateHasChanged);
@@ -299,6 +317,7 @@ else
         _usdaResults = null;
         _usdaError = null;
         _usdaApplied = null;
+        _usdaSelected = null;
     }
 
     private async Task OpenUsdaAsync()
@@ -325,19 +344,60 @@ else
         _usdaError = null;
         _usdaApplied = null;
         _usdaResults = null;
+        _usdaSelected = null;
         (_usdaResults, _usdaError) = await Usda.SearchAsync(_usdaQuery);
         _usdaBusy = false;
     }
 
     private void ApplyUsda(UsdaFood food)
     {
-        if (_editing is null) return;
-        if (string.IsNullOrWhiteSpace(_editing.Name)) _editing.Name = food.Description;
-        _editing.ServingSize = food.ServingText;
-        _editing.Calories = food.Calories;
-        _editing.Nutrients = new Dictionary<string, double>(food.Nutrients);
+        _usdaSelected = food;
+        _servAmount = food.DefaultAmount;
+        _servUnit = food.BaseUnit;
+        FillFromSelected();
+    }
+
+    private void OnServingAmountChanged(string? raw)
+    {
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            _servAmount = v;
+        FillFromSelected();
+    }
+
+    private void OnServingUnitChanged(string? unit)
+    {
+        if (!string.IsNullOrEmpty(unit)) _servUnit = unit;
+        FillFromSelected();
+    }
+
+    private void FillFromSelected()
+    {
+        if (_editing is null || _usdaSelected is null) return;
+        var baseAmount = UsdaService.ToBaseAmount(_servAmount, _servUnit, _usdaSelected.BaseUnit);
+        if (baseAmount is null)
+        {
+            _usdaError = "Enter a serving amount greater than zero.";
+            return;
+        }
+        _usdaError = null;
+        if (string.IsNullOrWhiteSpace(_editing.Name)) _editing.Name = _usdaSelected.Description;
+        _editing.ServingSize = ServingText(baseAmount.Value);
+        _editing.Calories = _usdaSelected.CaloriesFor(baseAmount.Value);
+        _editing.Nutrients = _usdaSelected.NutrientsFor(baseAmount.Value);
         _microsOpen = NutrientCatalog.Micros.Any(m => _editing.Nutrients.ContainsKey(m.Key));
-        _usdaApplied = $"Filled from “{food.Description}” — review below, adjust if needed, then Save.";
+        _usdaApplied = $"Filled from “{_usdaSelected.Description}” at {_editing.ServingSize} — change the serving below to rescale.";
+    }
+
+    private string ServingText(double baseAmount)
+    {
+        var food = _usdaSelected!;
+        // The unmodified label serving keeps its household text, e.g. "0.5 cup (113 g)".
+        if (food.LabelServingAmount is not null && _servUnit == food.BaseUnit &&
+            Math.Abs(_servAmount - food.LabelServingAmount.Value) < 0.001)
+            return food.DefaultServingDisplay;
+        return _servUnit == food.BaseUnit
+            ? $"{_servAmount:0.##} {_servUnit}"
+            : $"{_servAmount:0.##} {_servUnit} ({baseAmount:0.#} {food.BaseUnit})";
     }
 
     private string? NutrientValue(string key)

@@ -3,16 +3,47 @@ using CalorieTracker.Models;
 
 namespace CalorieTracker.Services;
 
-/// <summary>A search hit from USDA FoodData Central, scaled to one serving.</summary>
+/// <summary>
+/// A search hit from USDA FoodData Central. Nutrition is kept per 100 of the base unit
+/// (g or ml) so it can be rescaled to any user-chosen serving.
+/// </summary>
 public class UsdaFood
 {
     public int FdcId { get; init; }
     public string Description { get; init; } = "";
     public string? Brand { get; init; }
     public string DataType { get; init; } = "";
-    public string ServingText { get; init; } = "100 g";
-    public double? Calories { get; init; }
-    public Dictionary<string, double> Nutrients { get; init; } = new();
+
+    /// <summary>"g" for solid foods, "ml" for liquids (as reported by the label).</summary>
+    public string BaseUnit { get; init; } = "g";
+
+    /// <summary>Label serving in <see cref="BaseUnit"/> (branded foods only).</summary>
+    public double? LabelServingAmount { get; init; }
+
+    /// <summary>Label household text, e.g. "0.5 cup" (branded foods only).</summary>
+    public string? LabelServingText { get; init; }
+
+    public double? CaloriesPer100 { get; init; }
+    public Dictionary<string, double> NutrientsPer100 { get; init; } = new();
+
+    /// <summary>Amount used when a result is first applied: the label serving, else 100.</summary>
+    public double DefaultAmount => LabelServingAmount ?? 100;
+
+    public string DefaultServingDisplay
+    {
+        get
+        {
+            if (LabelServingAmount is null) return $"100 {BaseUnit}";
+            var metric = $"{LabelServingAmount:0.#} {BaseUnit}";
+            return string.IsNullOrWhiteSpace(LabelServingText) ? metric : $"{LabelServingText!.Trim()} ({metric})";
+        }
+    }
+
+    public double? CaloriesFor(double amountInBase) =>
+        CaloriesPer100 is null ? null : Math.Round(CaloriesPer100.Value * amountInBase / 100.0);
+
+    public Dictionary<string, double> NutrientsFor(double amountInBase) =>
+        NutrientsPer100.ToDictionary(kv => kv.Key, kv => Math.Round(kv.Value * amountInBase / 100.0, 1));
 }
 
 /// <summary>
@@ -41,6 +72,36 @@ public class UsdaService(LocalStore store, HttpClient http)
         ["328"] = "vitaminD",
     };
 
+    // ---------- Unit conversion ----------
+
+    private static readonly Dictionary<string, double> MassToGrams = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["g"] = 1,
+        ["kg"] = 1000,
+        ["oz"] = 28.3495,
+        ["lb"] = 453.592,
+    };
+
+    private static readonly Dictionary<string, double> VolumeToMl = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ml"] = 1,
+        ["l"] = 1000,
+        ["fl oz"] = 29.5735,
+    };
+
+    public static string[] UnitsForBase(string baseUnit) =>
+        baseUnit == "ml" ? new[] { "ml", "l", "fl oz" } : new[] { "g", "kg", "oz", "lb" };
+
+    /// <summary>Convert a user amount+unit to the food's base unit (g or ml). Null if invalid.</summary>
+    public static double? ToBaseAmount(double amount, string unit, string baseUnit)
+    {
+        if (amount <= 0) return null;
+        var table = baseUnit == "ml" ? VolumeToMl : MassToGrams;
+        return table.TryGetValue(unit, out var factor) ? amount * factor : null;
+    }
+
+    // ---------- API key ----------
+
     public async Task<string?> GetApiKeyAsync()
     {
         var key = await store.GetAsync(ApiKeyStorageKey);
@@ -60,6 +121,8 @@ public class UsdaService(LocalStore store, HttpClient http)
             ? (false, error)
             : (true, $"Key works — the USDA database is reachable ({results!.Count} sample result).");
     }
+
+    // ---------- Search ----------
 
     public async Task<(List<UsdaFood>? Results, string? Error)> SearchAsync(string query)
     {
@@ -101,25 +164,25 @@ public class UsdaService(LocalStore store, HttpClient http)
 
     private static UsdaFood ParseFood(JsonElement food)
     {
-        // Search results report nutrients per 100 g; branded items also carry their label
-        // serving size, which we scale to.
-        var factor = 1.0;
-        var servingText = "100 g";
+        // Search results report nutrients per 100 g (or 100 ml for liquids); branded items
+        // additionally carry their label serving.
+        var baseUnit = "g";
+        double? labelAmount = null;
+        string? labelText = null;
         if (food.TryGetProperty("servingSize", out var ss) && ss.TryGetDouble(out var size) && size > 0 &&
             food.TryGetProperty("servingSizeUnit", out var ssu))
         {
             var unit = (ssu.GetString() ?? "").ToLowerInvariant();
             if (unit is "g" or "grm" or "ml" or "mlt")
             {
-                factor = size / 100.0;
-                var household = food.TryGetProperty("householdServingFullText", out var h) ? h.GetString() : null;
-                var metric = $"{size:0.#} {(unit.StartsWith('m') ? "ml" : "g")}";
-                servingText = string.IsNullOrWhiteSpace(household) ? metric : $"{household!.Trim()} ({metric})";
+                baseUnit = unit.StartsWith('m') ? "ml" : "g";
+                labelAmount = size;
+                labelText = food.TryGetProperty("householdServingFullText", out var h) ? h.GetString() : null;
             }
         }
 
-        double? calories = null;
-        var nutrients = new Dictionary<string, double>();
+        double? caloriesPer100 = null;
+        var nutrientsPer100 = new Dictionary<string, double>();
         if (food.TryGetProperty("foodNutrients", out var list))
         {
             foreach (var n in list.EnumerateArray())
@@ -127,10 +190,10 @@ public class UsdaService(LocalStore store, HttpClient http)
                 if (!n.TryGetProperty("value", out var v) || !v.TryGetDouble(out var value)) continue;
                 var number = n.TryGetProperty("nutrientNumber", out var num) ? num.GetString() ?? "" : "";
                 // Energy: prefer 208 (kcal); Foundation foods may only have Atwater energy (957/958).
-                if (number == "208" || ((number == "957" || number == "958") && calories is null))
-                    calories = value * factor;
+                if (number == "208" || ((number == "957" || number == "958") && caloriesPer100 is null))
+                    caloriesPer100 = value;
                 else if (NutrientMap.TryGetValue(number, out var nutrientKey) && value > 0)
-                    nutrients[nutrientKey] = Math.Round(value * factor, 1);
+                    nutrientsPer100[nutrientKey] = value;
             }
         }
 
@@ -141,9 +204,11 @@ public class UsdaService(LocalStore store, HttpClient http)
             Brand = food.TryGetProperty("brandOwner", out var b) ? ToTitleCase(b.GetString() ?? "") :
                     food.TryGetProperty("brandName", out var bn) ? ToTitleCase(bn.GetString() ?? "") : null,
             DataType = food.TryGetProperty("dataType", out var dt) ? dt.GetString() ?? "" : "",
-            ServingText = servingText,
-            Calories = calories is null ? null : Math.Round(calories.Value, 0),
-            Nutrients = nutrients,
+            BaseUnit = baseUnit,
+            LabelServingAmount = labelAmount,
+            LabelServingText = labelText,
+            CaloriesPer100 = caloriesPer100,
+            NutrientsPer100 = nutrientsPer100,
         };
     }
 
