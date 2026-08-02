@@ -229,6 +229,32 @@ textarea.input { resize: vertical; }
 .section-label { margin: 1rem 0 .5rem; font-size: .9rem; }
 .nutrients-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 
+/* ---------- USDA lookup ---------- */
+
+.name-row { display: flex; gap: .5rem; }
+.name-row .input { flex: 1; }
+.name-row .btn { white-space: nowrap; }
+
+.usda-panel {
+    margin-top: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: .75rem;
+    background: var(--bg);
+}
+.usda-search-row { display: flex; gap: .5rem; margin-bottom: .6rem; }
+.usda-search-row .input { flex: 1; }
+.usda-results { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
+.usda-results li {
+    padding: .5rem .6rem;
+    border-radius: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(47, 58, 71, .5);
+}
+.usda-results li:last-child { border-bottom: none; }
+.usda-results li:hover { background: rgba(70, 192, 122, .08); }
+.usda-line1 { display: flex; justify-content: space-between; gap: .75rem; }
+
 .micros-details { margin-top: 1rem; }
 .micros-details summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: .9rem; margin-bottom: .5rem; }
 .micros-details[open] summary { color: var(--text); }

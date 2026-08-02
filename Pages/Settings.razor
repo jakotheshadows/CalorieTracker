@@ -1,6 +1,7 @@
 @page "/settings"
 @inject AppState State
 @inject LocalStore Store
+@inject UsdaService Usda
 @inject IJSRuntime JS
 
 <PageTitle>CalTrack — Settings</PageTitle>
@@ -34,6 +35,34 @@
                 <InputFile OnChange="ImportAsync" accept=".json,application/json" />
             </label>
         </div>
+    </div>
+
+    <div class="card">
+        <h3>USDA nutrition lookup</h3>
+        <p class="muted small">
+            Auto-fill calories, macros, and micros in the menu item editor by searching the USDA
+            FoodData Central database (over 400,000 foods, including brand-name grocery items).
+            It needs your own free API key — takes about a minute to get.
+        </p>
+
+        <ol class="muted small setup-steps">
+            <li>Request a key at <a href="https://api.data.gov/signup/" target="_blank" rel="noopener">api.data.gov/signup</a> (just name + email — the key is shown/emailed instantly).</li>
+            <li>Paste it below and save, then use <b>🔎 Search USDA</b> when adding or editing a menu item.</li>
+        </ol>
+
+        <label class="field">
+            <span>API key</span>
+            <input class="input" @bind="_usdaKey" placeholder="e.g. aBcDeFgH123…" />
+        </label>
+        <div class="btn-row">
+            <button class="btn btn-accent" @onclick="SaveUsdaKeyAsync">Save key</button>
+            <button class="btn" disabled="@(_testingKey || string.IsNullOrWhiteSpace(_usdaKey))" @onclick="TestUsdaKeyAsync">Test key</button>
+            @if (_usdaKeyStatus is not null)
+            {
+                <span class="muted small update-status">@_usdaKeyStatus</span>
+            }
+        </div>
+        <p class="muted small">The key stays in this browser's storage only — it is never included in JSON exports.</p>
     </div>
 
     <div class="card">
@@ -78,9 +107,31 @@
     private bool _checkingUpdate;
     private string? _updateStatus;
     private string? _version;
+    private string _usdaKey = "";
+    private string? _usdaKeyStatus;
+    private bool _testingKey;
 
-    protected override async Task OnInitializedAsync() =>
+    protected override async Task OnInitializedAsync()
+    {
         _version = await JS.InvokeAsync<string>("calTracker.getVersion");
+        _usdaKey = await Usda.GetApiKeyAsync() ?? "";
+    }
+
+    private async Task SaveUsdaKeyAsync()
+    {
+        await Usda.SetApiKeyAsync(_usdaKey);
+        _usdaKeyStatus = string.IsNullOrWhiteSpace(_usdaKey) ? "Key removed." : "Key saved.";
+    }
+
+    private async Task TestUsdaKeyAsync()
+    {
+        _testingKey = true;
+        _usdaKeyStatus = "Testing…";
+        var (ok, message) = await Usda.TestKeyAsync(_usdaKey.Trim());
+        _usdaKeyStatus = message;
+        if (ok) await Usda.SetApiKeyAsync(_usdaKey);
+        _testingKey = false;
+    }
 
     private async Task CheckUpdatesAsync()
     {

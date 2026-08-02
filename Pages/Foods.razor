@@ -1,6 +1,8 @@
 @page "/foods"
 @implements IDisposable
 @inject AppState State
+@inject UsdaService Usda
+@inject NavigationManager Nav
 
 <PageTitle>CalTrack — Menu Items</PageTitle>
 
@@ -24,6 +26,7 @@
 {
     <div class="card empty-state">
         <p>No menu items yet. Add the foods, beverages, and snacks you eat — only a name is required.</p>
+        <p class="muted small">Tip: the 🔎 Search USDA button in the editor can auto-fill calories, macros, and micros from the USDA food database.</p>
     </div>
 }
 else if (items.Count == 0)
@@ -99,7 +102,10 @@ else
             <div class="form-grid">
                 <label class="field span-2">
                     <span>Name <b class="req">*</b></span>
-                    <input class="input" @bind="_editing.Name" placeholder="e.g. Grilled chicken breast" />
+                    <div class="name-row">
+                        <input class="input" @bind="_editing.Name" placeholder="e.g. Grilled chicken breast" />
+                        <button class="btn" type="button" title="Auto-fill nutrition facts from the USDA food database" @onclick="OpenUsdaAsync">🔎 Search USDA</button>
+                    </div>
                 </label>
                 <label class="field">
                     <span>Category</span>
@@ -126,6 +132,63 @@ else
                     <span>Exclude from randomize</span>
                 </label>
             </div>
+
+            @if (_usdaOpen)
+            {
+                <div class="usda-panel">
+                    @if (!_usdaHasKey)
+                    {
+                        <p class="muted small">
+                            Nutrition lookup searches the USDA FoodData Central database and fills in calories,
+                            macros, and micros for you. It needs a free API key — about a minute to set up
+                            (instructions are on the Settings page).
+                        </p>
+                        <div class="btn-row">
+                            <button class="btn btn-accent" @onclick="GoToSettings">Set up in Settings</button>
+                            <button class="btn" @onclick="() => _usdaOpen = false">Close</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="usda-search-row">
+                            <input class="input" placeholder="Search foods, brands…" @bind="_usdaQuery" @bind:event="oninput" @onkeydown="OnUsdaKeyDown" />
+                            <button class="btn btn-accent" disabled="@_usdaBusy" @onclick="RunUsdaSearchAsync">@(_usdaBusy ? "Searching…" : "Search")</button>
+                            <button class="btn" @onclick="() => _usdaOpen = false">Close</button>
+                        </div>
+                        @if (_usdaError is not null)
+                        {
+                            <div class="alert-error">@_usdaError</div>
+                        }
+                        @if (_usdaApplied is not null)
+                        {
+                            <div class="alert-ok">@_usdaApplied</div>
+                        }
+                        @if (_usdaResults is not null)
+                        {
+                            @if (_usdaResults.Count == 0)
+                            {
+                                <p class="muted small">No matches — try fewer or different words.</p>
+                            }
+                            else
+                            {
+                                <ul class="usda-results">
+                                    @foreach (var f in _usdaResults)
+                                    {
+                                        <li @key="f.FdcId" @onclick="() => ApplyUsda(f)" title="Click to fill the form with this food's nutrition">
+                                            <div class="usda-line1">
+                                                <span class="item-name">@f.Description</span>
+                                                <span class="num">@(f.Calories is null ? "—" : $"{f.Calories:N0} kcal")</span>
+                                            </div>
+                                            <div class="muted small">@(f.Brand is null ? f.DataType : $"{f.Brand} · {f.DataType}") · per @f.ServingText</div>
+                                        </li>
+                                    }
+                                </ul>
+                                <p class="muted small">Click a result to fill the form — you can adjust anything before saving.</p>
+                            }
+                        }
+                    }
+                </div>
+            }
 
             <h4 class="section-label">Macronutrients <span class="muted small">(per serving, optional)</span></h4>
             <div class="form-grid nutrients-grid">
@@ -175,6 +238,14 @@ else
     private string? _error;
     private bool _microsOpen;
 
+    private bool _usdaOpen;
+    private bool _usdaHasKey;
+    private string _usdaQuery = "";
+    private bool _usdaBusy;
+    private string? _usdaError;
+    private string? _usdaApplied;
+    private List<UsdaFood>? _usdaResults;
+
     protected override void OnInitialized() => State.Changed += OnChanged;
     private void OnChanged() => InvokeAsync(StateHasChanged);
     public void Dispose() => State.Changed -= OnChanged;
@@ -202,6 +273,7 @@ else
         _originalName = null;
         _error = null;
         _microsOpen = false;
+        ResetUsda();
     }
 
     private void StartEdit(FoodItem item)
@@ -210,12 +282,62 @@ else
         _originalName = item.Name;
         _error = null;
         _microsOpen = NutrientCatalog.Micros.Any(m => item.Nutrients.ContainsKey(m.Key));
+        ResetUsda();
     }
 
     private void CancelEdit()
     {
         _editing = null;
         _error = null;
+        ResetUsda();
+    }
+
+    private void ResetUsda()
+    {
+        _usdaOpen = false;
+        _usdaQuery = "";
+        _usdaResults = null;
+        _usdaError = null;
+        _usdaApplied = null;
+    }
+
+    private async Task OpenUsdaAsync()
+    {
+        _usdaOpen = true;
+        _usdaError = null;
+        _usdaApplied = null;
+        _usdaHasKey = await Usda.GetApiKeyAsync() is not null;
+        if (_usdaHasKey && string.IsNullOrWhiteSpace(_usdaQuery))
+            _usdaQuery = _editing?.Name ?? "";
+    }
+
+    private void GoToSettings() => Nav.NavigateTo("settings");
+
+    private async Task OnUsdaKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RunUsdaSearchAsync();
+    }
+
+    private async Task RunUsdaSearchAsync()
+    {
+        if (_usdaBusy) return;
+        _usdaBusy = true;
+        _usdaError = null;
+        _usdaApplied = null;
+        _usdaResults = null;
+        (_usdaResults, _usdaError) = await Usda.SearchAsync(_usdaQuery);
+        _usdaBusy = false;
+    }
+
+    private void ApplyUsda(UsdaFood food)
+    {
+        if (_editing is null) return;
+        if (string.IsNullOrWhiteSpace(_editing.Name)) _editing.Name = food.Description;
+        _editing.ServingSize = food.ServingText;
+        _editing.Calories = food.Calories;
+        _editing.Nutrients = new Dictionary<string, double>(food.Nutrients);
+        _microsOpen = NutrientCatalog.Micros.Any(m => _editing.Nutrients.ContainsKey(m.Key));
+        _usdaApplied = $"Filled from “{food.Description}” — review below, adjust if needed, then Save.";
     }
 
     private string? NutrientValue(string key)
