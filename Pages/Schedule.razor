@@ -234,7 +234,9 @@
             <h2>Randomize schedule</h2>
             <p class="muted small">
                 Fills each day in the range with random menu items approximating your targets.
-                Only items with calories &gt; 0 are used. Calorie target is required; everything else is optional.
+                Only items with calories &gt; 0 that aren't marked “exclude from randomize” are used.
+                Calorie target is required; everything else is optional.
+                <b>@State.Data.Items.Count(AppState.IsRandomEligible)</b> of @State.Data.Items.Count menu items are eligible.
             </p>
 
             @if (_randError is not null)

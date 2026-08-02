@@ -52,6 +52,10 @@ else
                     <tr>
                         <td>
                             <span class="item-name">@item.Name</span>
+                            @if (item.ExcludeFromRandom)
+                            {
+                                <span class="badge badge-norand" title="Excluded from random generation">no 🎲</span>
+                            }
                             @if (!string.IsNullOrWhiteSpace(item.Description))
                             {
                                 <div class="muted small item-desc">@item.Description</div>
@@ -116,6 +120,10 @@ else
                 <label class="field">
                     <span>Calories (kcal)</span>
                     <input class="input" type="number" step="any" min="0" @bind="_editing.Calories" />
+                </label>
+                <label class="field checkbox-field">
+                    <input type="checkbox" @bind="_editing.ExcludeFromRandom" />
+                    <span>Exclude from randomize</span>
                 </label>
             </div>
 

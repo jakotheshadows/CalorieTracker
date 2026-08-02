@@ -274,8 +274,8 @@ public class AppState(LocalStore store)
         if (targets.Calories <= 0) return "Calorie target must be greater than zero.";
         if (endInclusive < start) return "End date must be on or after the start date.";
 
-        var pool = Data.Items.Where(i => (i.Calories ?? 0) > 0).ToList();
-        if (pool.Count == 0) return "Random generation needs at least one menu item with calories greater than zero.";
+        var pool = Data.Items.Where(IsRandomEligible).ToList();
+        if (pool.Count == 0) return "Random generation needs at least one menu item with calories greater than zero that isn't excluded from randomize.";
 
         var rng = new Random();
         for (var d = start; d <= endInclusive; d = d.AddDays(1))
@@ -289,6 +289,8 @@ public class AppState(LocalStore store)
         await PersistAsync();
         return null;
     }
+
+    public static bool IsRandomEligible(FoodItem item) => (item.Calories ?? 0) > 0 && !item.ExcludeFromRandom;
 
     private static List<ScheduleEntry> GenerateDay(List<FoodItem> pool, RandomTargets t, Random rng)
     {

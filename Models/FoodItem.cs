@@ -16,6 +16,9 @@ public class FoodItem
     public string? Description { get; set; }
     public double? Calories { get; set; }
 
+    /// <summary>When true, the random schedule generator never picks this item.</summary>
+    public bool ExcludeFromRandom { get; set; }
+
     /// <summary>Per-serving nutrient amounts keyed by <see cref="NutrientDef.Key"/>. Absent key = not specified.</summary>
     public Dictionary<string, double> Nutrients { get; set; } = new();
 
@@ -28,6 +31,7 @@ public class FoodItem
         ServingSize = ServingSize,
         Description = Description,
         Calories = Calories,
+        ExcludeFromRandom = ExcludeFromRandom,
         Nutrients = new Dictionary<string, double>(Nutrients),
     };
 }
