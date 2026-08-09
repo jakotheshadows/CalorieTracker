@@ -18,6 +18,9 @@ public class AppData
     /// <summary>Reusable day plans keyed by template name (unique, case-insensitive).</summary>
     public Dictionary<string, List<ScheduleEntry>> Templates { get; set; } = new();
 
+    /// <summary>Recipes; names share the menu-item namespace (unique, case-insensitive).</summary>
+    public List<Recipe> Recipes { get; set; } = new();
+
     /// <summary>Body weight log in kilograms, keyed "yyyy-MM-dd" (one entry per day).</summary>
     public Dictionary<string, double> Weights { get; set; } = new();
 

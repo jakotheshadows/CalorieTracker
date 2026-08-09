@@ -51,7 +51,7 @@
                         <tbody>
                             @foreach (var entry in entries.ToList())
                             {
-                                var item = State.FindItem(entry.ItemName);
+                                var item = State.ResolveItem(entry.ItemName);
                                 <tr @key="entry">
                                     <td>
                                         <span class="item-name">@entry.ItemName</span>
@@ -85,9 +85,27 @@
                 <div class="add-entry-row">
                     <select class="input" @bind="_addItemName">
                         <option value="">— pick a menu item —</option>
-                        @foreach (var item in State.Data.Items)
+                        @if (State.Data.Recipes.Count == 0)
                         {
-                            <option value="@item.Name">@item.Name @(item.Calories is null ? "" : $"({item.Calories:N0} kcal)")</option>
+                            @foreach (var item in State.Data.Items)
+                            {
+                                <option value="@item.Name">@item.Name @(item.Calories is null ? "" : $"({item.Calories:N0} kcal)")</option>
+                            }
+                        }
+                        else
+                        {
+                            <optgroup label="Menu items">
+                                @foreach (var item in State.Data.Items)
+                                {
+                                    <option value="@item.Name">@item.Name @(item.Calories is null ? "" : $"({item.Calories:N0} kcal)")</option>
+                                }
+                            </optgroup>
+                            <optgroup label="Recipes (per serving)">
+                                @foreach (var recipe in State.Data.Recipes)
+                                {
+                                    <option value="@recipe.Name">@recipe.Name @(recipe.PerServingCalories() is { } kcal ? $"({kcal:N0} kcal)" : "")</option>
+                                }
+                            </optgroup>
                         }
                     </select>
                     <input class="input input-sm num" type="number" step="0.5" min="0.5" @bind="_addServings" />
@@ -270,9 +288,9 @@
             <p class="muted small">
                 Fills each day in the range with random menu items. The calorie target is a daily
                 <b>cap</b> (tolerance sets how far a day may go over it); macro/micro targets are
-                daily <b>minimums</b>. Only items with calories &gt; 0 that aren't marked
+                daily <b>minimums</b>. Only items and recipes with calories &gt; 0 that aren't marked
                 “exclude from randomize” are used.
-                <b>@State.Data.Items.Count(AppState.IsRandomEligible)</b> of @State.Data.Items.Count menu items are eligible.
+                <b>@State.AllMenuItems().Count(AppState.IsRandomEligible)</b> of @(State.Data.Items.Count + State.Data.Recipes.Count) menu items and recipes are eligible.
             </p>
 
             @if (_randError is not null)

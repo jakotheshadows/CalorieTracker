@@ -1,91 +1,178 @@
 @page "/foods"
 @implements IDisposable
 @inject AppState State
-@inject UsdaService Usda
-@inject NavigationManager Nav
 
 <PageTitle>Menu Items</PageTitle>
 
 <div class="page-header">
     <h1>Menu Items</h1>
-    <button class="btn btn-accent" @onclick="StartAdd">+ New item</button>
+    @if (_tab == Tab.Items)
+    {
+        <button class="btn btn-accent" @onclick="StartAdd">+ New item</button>
+    }
+    else
+    {
+        <button class="btn btn-accent" @onclick="StartAddRecipe">+ New recipe</button>
+    }
+</div>
+
+<div class="tab-bar">
+    <button class="btn @(_tab == Tab.Items ? "btn-accent" : "")" @onclick="() => _tab = Tab.Items">Items</button>
+    <button class="btn @(_tab == Tab.Recipes ? "btn-accent" : "")" @onclick="() => _tab = Tab.Recipes">Recipes@(State.Data.Recipes.Count > 0 ? $" ({State.Data.Recipes.Count})" : "")</button>
 </div>
 
 <div class="toolbar">
-    <input class="input search" placeholder="Search items…" @bind="_search" @bind:event="oninput" />
-    <select class="input" @bind="_categoryFilter">
-        <option value="">All categories</option>
-        <option value="Food">Food</option>
-        <option value="Beverage">Beverage</option>
-        <option value="Snack">Snack</option>
-    </select>
+    <input class="input search" placeholder="@(_tab == Tab.Items ? "Search items…" : "Search recipes…")" @bind="_search" @bind:event="oninput" />
+    @if (_tab == Tab.Items)
+    {
+        <select class="input" @bind="_categoryFilter">
+            <option value="">All categories</option>
+            <option value="Food">Food</option>
+            <option value="Beverage">Beverage</option>
+            <option value="Snack">Snack</option>
+        </select>
+    }
 </div>
 
-@{ var items = Filtered().ToList(); }
-@if (State.Data.Items.Count == 0)
+@if (_tab == Tab.Items)
 {
-    <div class="card empty-state">
-        <p>No menu items yet. Add the foods, beverages, and snacks you eat — only a name is required.</p>
-        <p class="muted small">Tip: the 🔎 Search USDA button in the editor can auto-fill calories, macros, and micros from the USDA food database.</p>
-    </div>
-}
-else if (items.Count == 0)
-{
-    <div class="card empty-state"><p class="muted">No items match your search.</p></div>
+    var items = Filtered().ToList();
+    @if (State.Data.Items.Count == 0)
+    {
+        <div class="card empty-state">
+            <p>No menu items yet. Add the foods, beverages, and snacks you eat — only a name is required.</p>
+            <p class="muted small">Tip: the 🔎 Search USDA button in the editor can auto-fill calories, macros, and micros from the USDA food database.</p>
+        </div>
+    }
+    else if (items.Count == 0)
+    {
+        <div class="card empty-state"><p class="muted">No items match your search.</p></div>
+    }
+    else
+    {
+        <div class="card table-card">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Serving</th>
+                        <th class="num">Calories</th>
+                        <th class="num">Protein</th>
+                        <th class="num">Carbs</th>
+                        <th class="num">Fat</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in items)
+                    {
+                        <tr>
+                            <td>
+                                <span class="item-name">@item.Name</span>
+                                @if (item.ExcludeFromRandom)
+                                {
+                                    <span class="badge badge-norand" title="Excluded from random generation">no 🎲</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(item.Description))
+                                {
+                                    <div class="muted small item-desc">@item.Description</div>
+                                }
+                            </td>
+                            <td><span class="badge badge-@item.Category.ToString().ToLowerInvariant()">@item.Category</span></td>
+                            <td class="muted">@(item.ServingSize ?? "—")</td>
+                            <td class="num">@(item.Calories?.ToString("N0") ?? "—")</td>
+                            <td class="num">@FormatNutrient(item, "protein")</td>
+                            <td class="num">@FormatNutrient(item, "carbs")</td>
+                            <td class="num">@FormatNutrient(item, "fat")</td>
+                            <td class="actions">
+                                <button class="btn btn-sm" @onclick="() => StartEdit(item)">Edit</button>
+                                @if (_confirmDelete == item.Name)
+                                {
+                                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(item.Name)">Confirm?</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-ghost-danger" @onclick="() => _confirmDelete = item.Name">Delete</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
 }
 else
 {
-    <div class="card table-card">
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Category</th>
-                    <th>Serving</th>
-                    <th class="num">Calories</th>
-                    <th class="num">Protein</th>
-                    <th class="num">Carbs</th>
-                    <th class="num">Fat</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var item in items)
-                {
+    var recipes = FilteredRecipes().ToList();
+    @if (State.Data.Recipes.Count == 0)
+    {
+        <div class="card empty-state">
+            <p>No recipes yet. A recipe is a set of ingredients with amounts — CalTrack totals the nutrition and divides it into servings.</p>
+            <p class="muted small">Once saved, a recipe can be scheduled just like any other menu item (one serving at a time).</p>
+        </div>
+    }
+    else if (recipes.Count == 0)
+    {
+        <div class="card empty-state"><p class="muted">No recipes match your search.</p></div>
+    }
+    else
+    {
+        <div class="card table-card">
+            <table class="data-table">
+                <thead>
                     <tr>
-                        <td>
-                            <span class="item-name">@item.Name</span>
-                            @if (item.ExcludeFromRandom)
-                            {
-                                <span class="badge badge-norand" title="Excluded from random generation">no 🎲</span>
-                            }
-                            @if (!string.IsNullOrWhiteSpace(item.Description))
-                            {
-                                <div class="muted small item-desc">@item.Description</div>
-                            }
-                        </td>
-                        <td><span class="badge badge-@item.Category.ToString().ToLowerInvariant()">@item.Category</span></td>
-                        <td class="muted">@(item.ServingSize ?? "—")</td>
-                        <td class="num">@(item.Calories?.ToString("N0") ?? "—")</td>
-                        <td class="num">@FormatNutrient(item, "protein")</td>
-                        <td class="num">@FormatNutrient(item, "carbs")</td>
-                        <td class="num">@FormatNutrient(item, "fat")</td>
-                        <td class="actions">
-                            <button class="btn btn-sm" @onclick="() => StartEdit(item)">Edit</button>
-                            @if (_confirmDelete == item.Name)
-                            {
-                                <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(item.Name)">Confirm?</button>
-                            }
-                            else
-                            {
-                                <button class="btn btn-sm btn-ghost-danger" @onclick="() => _confirmDelete = item.Name">Delete</button>
-                            }
-                        </td>
+                        <th>Name</th>
+                        <th class="num">Servings</th>
+                        <th class="num">Ingredients</th>
+                        <th class="num">Calories<span class="muted small"> /serv</span></th>
+                        <th class="num">Protein</th>
+                        <th class="num">Carbs</th>
+                        <th class="num">Fat</th>
+                        <th></th>
                     </tr>
-                }
-            </tbody>
-        </table>
-    </div>
+                </thead>
+                <tbody>
+                    @foreach (var recipe in recipes)
+                    {
+                        var view = recipe.ToMenuItem();
+                        <tr>
+                            <td>
+                                <span class="item-name">@recipe.Name</span>
+                                @if (recipe.ExcludeFromRandom)
+                                {
+                                    <span class="badge badge-norand" title="Excluded from random generation">no 🎲</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(recipe.Description))
+                                {
+                                    <div class="muted small item-desc">@recipe.Description</div>
+                                }
+                            </td>
+                            <td class="num">@recipe.Servings.ToString("0.##")</td>
+                            <td class="num">@recipe.Ingredients.Count</td>
+                            <td class="num">@(view.Calories?.ToString("N0") ?? "—")</td>
+                            <td class="num">@FormatNutrient(view, "protein")</td>
+                            <td class="num">@FormatNutrient(view, "carbs")</td>
+                            <td class="num">@FormatNutrient(view, "fat")</td>
+                            <td class="actions">
+                                <button class="btn btn-sm" @onclick="() => StartEditRecipe(recipe)">Edit</button>
+                                @if (_confirmDelete == recipe.Name)
+                                {
+                                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteRecipeAsync(recipe.Name)">Confirm?</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-ghost-danger" @onclick="() => _confirmDelete = recipe.Name">Delete</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="muted small">Per-serving values — schedule a recipe like any other item; one serving is 1/N of the whole recipe.</p>
+    }
 }
 
 @if (_editing is not null)
@@ -104,7 +191,7 @@ else
                     <span>Name <b class="req">*</b></span>
                     <div class="name-row">
                         <input class="input" @bind="_editing.Name" placeholder="e.g. Grilled chicken breast" />
-                        <button class="btn" type="button" title="Auto-fill nutrition facts from the USDA food database" @onclick="OpenUsdaAsync">🔎 Search USDA</button>
+                        <button class="btn" type="button" title="Auto-fill nutrition facts from the USDA food database" @onclick="() => _usdaOpen = true">🔎 Search USDA</button>
                     </div>
                 </label>
                 <label class="field">
@@ -135,74 +222,7 @@ else
 
             @if (_usdaOpen)
             {
-                <div class="usda-panel">
-                    @if (!_usdaHasKey)
-                    {
-                        <p class="muted small">
-                            Nutrition lookup searches the USDA FoodData Central database and fills in calories,
-                            macros, and micros for you. It needs a free API key — about a minute to set up
-                            (instructions are on the Settings page).
-                        </p>
-                        <div class="btn-row">
-                            <button class="btn btn-accent" @onclick="GoToSettings">Set up in Settings</button>
-                            <button class="btn" @onclick="() => _usdaOpen = false">Close</button>
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="usda-search-row">
-                            <input class="input" placeholder="Search foods, brands…" @bind="_usdaQuery" @bind:event="oninput" @onkeydown="OnUsdaKeyDown" />
-                            <button class="btn btn-accent" disabled="@_usdaBusy" @onclick="RunUsdaSearchAsync">@(_usdaBusy ? "Searching…" : "Search")</button>
-                            <button class="btn" @onclick="() => _usdaOpen = false">Close</button>
-                        </div>
-                        @if (_usdaError is not null)
-                        {
-                            <div class="alert-error">@_usdaError</div>
-                        }
-                        @if (_usdaApplied is not null)
-                        {
-                            <div class="alert-ok">@_usdaApplied</div>
-                        }
-                        @if (_usdaSelected is not null)
-                        {
-                            <div class="usda-serving-row">
-                                <span class="muted small">My serving is:</span>
-                                <input class="input input-sm serving-amount" type="number" step="any" min="0"
-                                       value="@_servAmount" @onchange="e => OnServingAmountChanged(e.Value?.ToString())" />
-                                <select class="input serving-unit" value="@_servUnit" @onchange="e => OnServingUnitChanged(e.Value?.ToString())">
-                                    @foreach (var unit in UsdaService.UnitsForBase(_usdaSelected.BaseUnit))
-                                    {
-                                        <option value="@unit">@unit</option>
-                                    }
-                                </select>
-                                <span class="muted small">— nutrition below rescales automatically</span>
-                            </div>
-                        }
-                        @if (_usdaResults is not null)
-                        {
-                            @if (_usdaResults.Count == 0)
-                            {
-                                <p class="muted small">No matches — try fewer or different words.</p>
-                            }
-                            else
-                            {
-                                <ul class="usda-results">
-                                    @foreach (var f in _usdaResults)
-                                    {
-                                        <li @key="f.FdcId" @onclick="() => ApplyUsda(f)" title="Click to fill the form with this food's nutrition">
-                                            <div class="usda-line1">
-                                                <span class="item-name">@f.Description</span>
-                                                <span class="num">@(f.CaloriesFor(f.DefaultAmount) is { } kcal ? $"{kcal:N0} kcal" : "—")</span>
-                                            </div>
-                                            <div class="muted small">@(f.Brand is null ? f.DataType : $"{f.Brand} · {f.DataType}") · per @f.DefaultServingDisplay</div>
-                                        </li>
-                                    }
-                                </ul>
-                                <p class="muted small">Click a result to fill the form — you can adjust anything before saving.</p>
-                            }
-                        }
-                    }
-                </div>
+                <UsdaPanel InitialQuery="@_editing.Name" OnApplied="OnItemUsdaApplied" OnClose="() => _usdaOpen = false" />
             }
 
             <h4 class="section-label">Macronutrients <span class="muted small">(per serving, optional)</span></h4>
@@ -243,7 +263,201 @@ else
     </div>
 }
 
+@if (_recipe is not null)
+{
+    <div class="modal-backdrop" @onclick="CancelRecipe">
+        <div class="modal-panel modal-wide" @onclick:stopPropagation="true">
+            <h2>@(_recipeOriginalName is null ? "New recipe" : $"Edit “{_recipeOriginalName}”")</h2>
+
+            @if (_recipeError is not null)
+            {
+                <div class="alert-error">@_recipeError</div>
+            }
+
+            <div class="form-grid">
+                <label class="field span-2">
+                    <span>Name <b class="req">*</b></span>
+                    <input class="input" @bind="_recipe.Name" placeholder="e.g. Turkey chili" />
+                </label>
+                <label class="field">
+                    <span>Makes (servings) <b class="req">*</b></span>
+                    <input class="input" type="number" step="any" min="0.25" @bind="_recipe.Servings" />
+                </label>
+                <label class="field checkbox-field">
+                    <input type="checkbox" @bind="_recipe.ExcludeFromRandom" />
+                    <span>Exclude from randomize</span>
+                </label>
+                <label class="field span-2">
+                    <span>Description</span>
+                    <textarea class="input" rows="2" @bind="_recipe.Description" placeholder="Optional notes"></textarea>
+                </label>
+            </div>
+
+            <h4 class="section-label">Ingredients</h4>
+            @if (_recipe.Ingredients.Count == 0)
+            {
+                <p class="muted small">No ingredients yet — add the first one below.</p>
+            }
+            else
+            {
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Ingredient</th>
+                            <th class="num">Amount</th>
+                            <th class="num">Calories</th>
+                            <th class="num">Protein</th>
+                            <th class="num">Carbs</th>
+                            <th class="num">Fat</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var (ing, i) in _recipe.Ingredients.Select((x, i) => (x, i)))
+                        {
+                            <tr @key="ing">
+                                <td><span class="item-name">@ing.Name</span></td>
+                                <td class="num">@ing.AmountDisplay</td>
+                                <td class="num">@(ing.Calories?.ToString("N0") ?? "—")</td>
+                                <td class="num">@(ing.Nutrient("protein")?.ToString("0.#") ?? "—")</td>
+                                <td class="num">@(ing.Nutrient("carbs")?.ToString("0.#") ?? "—")</td>
+                                <td class="num">@(ing.Nutrient("fat")?.ToString("0.#") ?? "—")</td>
+                                <td class="actions">
+                                    <button class="btn btn-sm" @onclick="() => EditIngredient(i)">Edit</button>
+                                    <button class="btn btn-sm btn-ghost-danger" @onclick="() => RemoveIngredient(i)">✕</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <div class="ing-form">
+                <h4 class="section-label">@(_ingIndex is null ? "Add ingredient" : $"Edit “{_recipe.Ingredients[_ingIndex.Value].Name}”")</h4>
+                @if (_ingError is not null)
+                {
+                    <div class="alert-error">@_ingError</div>
+                }
+                <div class="form-grid">
+                    <label class="field span-2">
+                        <span>Ingredient <b class="req">*</b></span>
+                        <div class="name-row">
+                            <input class="input" @bind="_ing.Name" placeholder="e.g. Ground turkey" />
+                            <button class="btn" type="button" title="Auto-fill nutrition from the USDA food database" @onclick="() => _ingUsdaOpen = true">🔎 Search USDA</button>
+                        </div>
+                    </label>
+                    <label class="field">
+                        <span>Amount <b class="req">*</b></span>
+                        <div class="input-pair">
+                            <input class="input" type="number" step="any" min="0" @bind="_ing.Amount" />
+                            <select class="input" @bind="_ing.Unit">
+                                @foreach (var unit in Units.Mass.Concat(Units.Volume))
+                                {
+                                    <option value="@unit">@unit</option>
+                                }
+                            </select>
+                        </div>
+                    </label>
+                    <label class="field">
+                        <span>Calories (kcal)</span>
+                        <input class="input" type="number" step="any" min="0"
+                               value="@IngCalories()"
+                               @onchange="e => SetIngCalories(e.Value?.ToString())" />
+                    </label>
+                </div>
+
+                @if (_ingUsdaOpen)
+                {
+                    <UsdaPanel InitialQuery="@_ing.Name" OnApplied="OnIngredientUsdaApplied" OnClose="() => _ingUsdaOpen = false" />
+                }
+
+                <h4 class="section-label">Macronutrients <span class="muted small">(for this amount, optional)</span></h4>
+                <div class="form-grid nutrients-grid">
+                    @foreach (var def in NutrientCatalog.Macros)
+                    {
+                        <label class="field" @key="def.Key">
+                            <span>@def.Label (@def.Unit)</span>
+                            <input class="input" type="number" step="any" min="0"
+                                   value="@IngNutrientValue(def.Key)"
+                                   @onchange="e => SetIngNutrient(def.Key, e.Value?.ToString())" />
+                        </label>
+                    }
+                </div>
+
+                <details class="micros-details" open="@_ingMicrosOpen">
+                    <summary @onclick="() => _ingMicrosOpen = !_ingMicrosOpen" @onclick:preventDefault="true">
+                        Micronutrients <span class="muted small">(for this amount, optional)</span>
+                    </summary>
+                    <div class="form-grid nutrients-grid">
+                        @foreach (var def in NutrientCatalog.Micros)
+                        {
+                            <label class="field" @key="def.Key">
+                                <span>@def.Label (@def.Unit)</span>
+                                <input class="input" type="number" step="any" min="0"
+                                       value="@IngNutrientValue(def.Key)"
+                                       @onchange="e => SetIngNutrient(def.Key, e.Value?.ToString())" />
+                            </label>
+                        }
+                    </div>
+                </details>
+
+                <div class="btn-row">
+                    <button class="btn btn-accent" @onclick="AddOrUpdateIngredient">@(_ingIndex is null ? "＋ Add to recipe" : "Update ingredient")</button>
+                    @if (_ingIndex is not null || !string.IsNullOrWhiteSpace(_ing.Name))
+                    {
+                        <button class="btn" @onclick="ResetIngredientForm">Cancel</button>
+                    }
+                </div>
+            </div>
+
+            @if (_recipe.Ingredients.Count > 0)
+            {
+                var total = _recipe.TotalCalories();
+                var perServing = _recipe.PerServingCalories();
+                var nutrients = _recipe.TotalNutrients();
+                var servings = _recipe.Servings > 0 ? _recipe.Servings : 1;
+                <h4 class="section-label">Recipe nutrition</h4>
+                <table class="data-table recipe-totals">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th class="num">Whole recipe</th>
+                            <th class="num">Per serving <span class="muted small">(of @servings.ToString("0.##"))</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Calories (kcal)</td>
+                            <td class="num">@(total?.ToString("N0") ?? "—")</td>
+                            <td class="num total-accent">@(perServing?.ToString("N0") ?? "—")</td>
+                        </tr>
+                        @foreach (var def in NutrientCatalog.All)
+                        {
+                            if (nutrients.TryGetValue(def.Key, out var v))
+                            {
+                                <tr>
+                                    <td>@def.Label (@def.Unit)</td>
+                                    <td class="num">@v.ToString("0.#")</td>
+                                    <td class="num">@((v / servings).ToString("0.#"))</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <div class="btn-row modal-actions">
+                <button class="btn btn-accent" @onclick="SaveRecipeAsync">Save recipe</button>
+                <button class="btn" @onclick="CancelRecipe">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
+    private enum Tab { Items, Recipes }
+
+    private Tab _tab = Tab.Items;
     private string _search = "";
     private string _categoryFilter = "";
     private string? _confirmDelete;
@@ -252,17 +466,16 @@ else
     private string? _originalName;
     private string? _error;
     private bool _microsOpen;
-
     private bool _usdaOpen;
-    private bool _usdaHasKey;
-    private string _usdaQuery = "";
-    private bool _usdaBusy;
-    private string? _usdaError;
-    private string? _usdaApplied;
-    private List<UsdaFood>? _usdaResults;
-    private UsdaFood? _usdaSelected;
-    private double _servAmount;
-    private string _servUnit = "g";
+
+    private Recipe? _recipe;
+    private string? _recipeOriginalName;
+    private string? _recipeError;
+    private RecipeIngredient _ing = new();
+    private int? _ingIndex;
+    private string? _ingError;
+    private bool _ingMicrosOpen;
+    private bool _ingUsdaOpen;
 
     protected override void OnInitialized() => State.Changed += OnChanged;
     private void OnChanged() => InvokeAsync(StateHasChanged);
@@ -279,11 +492,23 @@ else
         return q;
     }
 
+    private IEnumerable<Recipe> FilteredRecipes()
+    {
+        var q = State.Data.Recipes.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search))
+            q = q.Where(r => r.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                          || (r.Description?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+                          || r.Ingredients.Any(i => i.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+        return q;
+    }
+
     private static string FormatNutrient(FoodItem item, string key)
     {
         var v = item.Nutrient(key);
         return v is null ? "—" : v.Value.ToString("0.#");
     }
+
+    // ---------- Item editor ----------
 
     private void StartAdd()
     {
@@ -291,7 +516,7 @@ else
         _originalName = null;
         _error = null;
         _microsOpen = false;
-        ResetUsda();
+        _usdaOpen = false;
     }
 
     private void StartEdit(FoodItem item)
@@ -300,104 +525,24 @@ else
         _originalName = item.Name;
         _error = null;
         _microsOpen = NutrientCatalog.Micros.Any(m => item.Nutrients.ContainsKey(m.Key));
-        ResetUsda();
+        _usdaOpen = false;
     }
 
     private void CancelEdit()
     {
         _editing = null;
         _error = null;
-        ResetUsda();
-    }
-
-    private void ResetUsda()
-    {
         _usdaOpen = false;
-        _usdaQuery = "";
-        _usdaResults = null;
-        _usdaError = null;
-        _usdaApplied = null;
-        _usdaSelected = null;
     }
 
-    private async Task OpenUsdaAsync()
+    private void OnItemUsdaApplied(UsdaApplied a)
     {
-        _usdaOpen = true;
-        _usdaError = null;
-        _usdaApplied = null;
-        _usdaHasKey = await Usda.GetApiKeyAsync() is not null;
-        if (_usdaHasKey && string.IsNullOrWhiteSpace(_usdaQuery))
-            _usdaQuery = _editing?.Name ?? "";
-    }
-
-    private void GoToSettings() => Nav.NavigateTo("settings");
-
-    private async Task OnUsdaKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter") await RunUsdaSearchAsync();
-    }
-
-    private async Task RunUsdaSearchAsync()
-    {
-        if (_usdaBusy) return;
-        _usdaBusy = true;
-        _usdaError = null;
-        _usdaApplied = null;
-        _usdaResults = null;
-        _usdaSelected = null;
-        (_usdaResults, _usdaError) = await Usda.SearchAsync(_usdaQuery);
-        _usdaBusy = false;
-    }
-
-    private void ApplyUsda(UsdaFood food)
-    {
-        _usdaSelected = food;
-        _servAmount = food.DefaultAmount;
-        _servUnit = food.BaseUnit;
-        FillFromSelected();
-    }
-
-    private void OnServingAmountChanged(string? raw)
-    {
-        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
-            _servAmount = v;
-        FillFromSelected();
-    }
-
-    private void OnServingUnitChanged(string? unit)
-    {
-        if (!string.IsNullOrEmpty(unit)) _servUnit = unit;
-        FillFromSelected();
-    }
-
-    private void FillFromSelected()
-    {
-        if (_editing is null || _usdaSelected is null) return;
-        var baseAmount = UsdaService.ToBaseAmount(_servAmount, _servUnit, _usdaSelected.BaseUnit);
-        if (baseAmount is null)
-        {
-            _usdaError = "Enter a serving amount greater than zero.";
-            return;
-        }
-        _usdaError = null;
-        if (string.IsNullOrWhiteSpace(_editing.Name)) _editing.Name = _usdaSelected.Description;
-        _editing.ServingSize = ServingText(baseAmount.Value);
-        _editing.Calories = _usdaSelected.CaloriesFor(baseAmount.Value);
-        _editing.Nutrients = _usdaSelected.NutrientsFor(baseAmount.Value);
+        if (_editing is null) return;
+        if (string.IsNullOrWhiteSpace(_editing.Name)) _editing.Name = a.Food.Description;
+        _editing.ServingSize = a.ServingText;
+        _editing.Calories = a.Food.CaloriesFor(a.AmountInBase);
+        _editing.Nutrients = a.Food.NutrientsFor(a.AmountInBase);
         _microsOpen = NutrientCatalog.Micros.Any(m => _editing.Nutrients.ContainsKey(m.Key));
-        _usdaApplied = $"Filled from “{_usdaSelected.Description}” at {_editing.ServingSize} — change the serving below to rescale.";
-    }
-
-    private string ServingText(double baseAmount)
-    {
-        var food = _usdaSelected!;
-        // The unmodified label serving keeps its household text, e.g. "0.5 cup (113 g)".
-        if (food.LabelServingAmount is not null && _servUnit == food.BaseUnit &&
-            Math.Abs(_servAmount - food.LabelServingAmount.Value) < 0.001)
-            return food.DefaultServingDisplay;
-        return _servUnit == food.BaseUnit
-            ? $"{_servAmount:0.##} {_servUnit}"
-            : $"{_servAmount:0.##} {_servUnit} ({baseAmount:0.#} {food.BaseUnit})";
     }
 
     private string? NutrientValue(string key)
@@ -426,5 +571,132 @@ else
     {
         _confirmDelete = null;
         await State.DeleteItemAsync(name);
+    }
+
+    // ---------- Recipe editor ----------
+
+    private void StartAddRecipe()
+    {
+        _recipe = new Recipe();
+        _recipeOriginalName = null;
+        _recipeError = null;
+        ResetIngredientForm();
+    }
+
+    private void StartEditRecipe(Recipe recipe)
+    {
+        _recipe = recipe.Clone();
+        _recipeOriginalName = recipe.Name;
+        _recipeError = null;
+        ResetIngredientForm();
+    }
+
+    private void CancelRecipe()
+    {
+        _recipe = null;
+        _recipeError = null;
+        ResetIngredientForm();
+    }
+
+    private void ResetIngredientForm()
+    {
+        _ing = new RecipeIngredient();
+        _ingIndex = null;
+        _ingError = null;
+        _ingMicrosOpen = false;
+        _ingUsdaOpen = false;
+    }
+
+    private void EditIngredient(int index)
+    {
+        if (_recipe is null) return;
+        _ing = _recipe.Ingredients[index].Clone();
+        _ingIndex = index;
+        _ingError = null;
+        _ingMicrosOpen = NutrientCatalog.Micros.Any(m => _ing.NutrientsPer100.ContainsKey(m.Key));
+        _ingUsdaOpen = false;
+    }
+
+    private void RemoveIngredient(int index)
+    {
+        if (_recipe is null) return;
+        _recipe.Ingredients.RemoveAt(index);
+        if (_ingIndex == index) ResetIngredientForm();
+        else if (_ingIndex > index) _ingIndex--;
+    }
+
+    /// <summary>Validate the ingredient form and commit it to the recipe. Null on success.</summary>
+    private string? CommitIngredient()
+    {
+        if (_recipe is null) return "No recipe open.";
+        var name = _ing.Name?.Trim() ?? "";
+        if (name.Length == 0) return "Ingredient name is required.";
+        if (_ing.AmountInBase is null) return "Enter an amount greater than zero.";
+        _ing.Name = name;
+
+        if (_ingIndex is { } idx) _recipe.Ingredients[idx] = _ing;
+        else _recipe.Ingredients.Add(_ing);
+        ResetIngredientForm();
+        return null;
+    }
+
+    private void AddOrUpdateIngredient() => _ingError = CommitIngredient();
+
+    private void OnIngredientUsdaApplied(UsdaApplied a)
+    {
+        if (string.IsNullOrWhiteSpace(_ing.Name)) _ing.Name = a.Food.Description;
+        _ing.Amount = a.Amount;
+        _ing.Unit = a.Unit;
+        _ing.CaloriesPer100 = a.Food.CaloriesPer100;
+        _ing.NutrientsPer100 = new Dictionary<string, double>(a.Food.NutrientsPer100);
+        _ingMicrosOpen = NutrientCatalog.Micros.Any(m => _ing.NutrientsPer100.ContainsKey(m.Key));
+        _ingError = null;
+    }
+
+    private string? IngCalories() =>
+        _ing.Calories?.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private void SetIngCalories(string? raw)
+    {
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+        {
+            _ing.CaloriesPer100 = null;
+            return;
+        }
+        if (_ing.AmountInBase is { } b) _ing.CaloriesPer100 = v * 100.0 / b;
+        else _ingError = "Enter the amount first — nutrition is stored per unit of weight.";
+    }
+
+    private string? IngNutrientValue(string key) =>
+        _ing.Nutrient(key)?.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private void SetIngNutrient(string key, string? raw)
+    {
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+        {
+            _ing.NutrientsPer100.Remove(key);
+            return;
+        }
+        if (_ing.AmountInBase is { } b) _ing.NutrientsPer100[key] = v * 100.0 / b;
+        else _ingError = "Enter the amount first — nutrition is stored per unit of weight.";
+    }
+
+    private async Task SaveRecipeAsync()
+    {
+        if (_recipe is null) return;
+        // Commit a half-filled ingredient form so its data isn't silently lost.
+        if (!string.IsNullOrWhiteSpace(_ing.Name))
+        {
+            _ingError = CommitIngredient();
+            if (_ingError is not null) return;
+        }
+        _recipeError = await State.UpsertRecipeAsync(_recipe, _recipeOriginalName);
+        if (_recipeError is null) CancelRecipe();
+    }
+
+    private async Task DeleteRecipeAsync(string name)
+    {
+        _confirmDelete = null;
+        await State.DeleteRecipeAsync(name);
     }
 }

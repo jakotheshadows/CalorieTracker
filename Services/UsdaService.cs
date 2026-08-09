@@ -46,6 +46,9 @@ public class UsdaFood
         NutrientsPer100.ToDictionary(kv => kv.Key, kv => Math.Round(kv.Value * amountInBase / 100.0, 1));
 }
 
+/// <summary>A USDA result applied at a chosen serving, as reported by the UsdaPanel component.</summary>
+public record UsdaApplied(UsdaFood Food, double Amount, string Unit, double AmountInBase, string ServingText);
+
 /// <summary>
 /// USDA FoodData Central lookup (https://fdc.nal.usda.gov). Requires the user's own free
 /// api.data.gov key, stored only in this browser's localStorage — never in exports.
@@ -72,33 +75,13 @@ public class UsdaService(LocalStore store, HttpClient http)
         ["328"] = "vitaminD",
     };
 
-    // ---------- Unit conversion ----------
+    // ---------- Unit conversion (shared tables live in Models.Units) ----------
 
-    private static readonly Dictionary<string, double> MassToGrams = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["g"] = 1,
-        ["kg"] = 1000,
-        ["oz"] = 28.3495,
-        ["lb"] = 453.592,
-    };
-
-    private static readonly Dictionary<string, double> VolumeToMl = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ml"] = 1,
-        ["l"] = 1000,
-        ["fl oz"] = 29.5735,
-    };
-
-    public static string[] UnitsForBase(string baseUnit) =>
-        baseUnit == "ml" ? new[] { "ml", "l", "fl oz" } : new[] { "g", "kg", "oz", "lb" };
+    public static string[] UnitsForBase(string baseUnit) => Units.ForBase(baseUnit);
 
     /// <summary>Convert a user amount+unit to the food's base unit (g or ml). Null if invalid.</summary>
-    public static double? ToBaseAmount(double amount, string unit, string baseUnit)
-    {
-        if (amount <= 0) return null;
-        var table = baseUnit == "ml" ? VolumeToMl : MassToGrams;
-        return table.TryGetValue(unit, out var factor) ? amount * factor : null;
-    }
+    public static double? ToBaseAmount(double amount, string unit, string baseUnit) =>
+        Units.BaseUnitFor(unit) == baseUnit ? Units.ToBase(amount, unit) : null;
 
     // ---------- API key ----------
 

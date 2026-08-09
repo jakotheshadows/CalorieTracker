@@ -73,6 +73,20 @@ public class AppState(LocalStore store)
     public FoodItem? FindItem(string name) =>
         Data.Items.FirstOrDefault(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase));
 
+    public Recipe? FindRecipe(string name) =>
+        Data.Recipes.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Resolve a schedule/template name to a menu item: a plain item, or a recipe presented
+    /// as its per-serving menu-item view. Null when the name matches neither.
+    /// </summary>
+    public FoodItem? ResolveItem(string name) =>
+        FindItem(name) ?? FindRecipe(name)?.ToMenuItem();
+
+    /// <summary>All schedulable menu items: plain items plus recipes as per-serving views.</summary>
+    public IEnumerable<FoodItem> AllMenuItems() =>
+        Data.Items.Concat(Data.Recipes.Select(r => r.ToMenuItem()));
+
     /// <summary>Add or update an item. <paramref name="originalName"/> is non-null when editing an existing item.</summary>
     public async Task<string?> UpsertItemAsync(FoodItem item, string? originalName)
     {
@@ -84,6 +98,7 @@ public class AppState(LocalStore store)
             string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(i.Name, originalName, StringComparison.OrdinalIgnoreCase));
         if (duplicate is not null) return $"An item named \"{duplicate.Name}\" already exists. Names must be unique.";
+        if (FindRecipe(name) is { } recipeDup) return $"A recipe named \"{recipeDup.Name}\" already exists. Names must be unique across items and recipes.";
 
         if (originalName is null)
         {
@@ -118,6 +133,68 @@ public class AppState(LocalStore store)
     public async Task DeleteItemAsync(string name)
     {
         Data.Items.RemoveAll(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase));
+        foreach (var key in Data.Days.Keys.ToList())
+        {
+            Data.Days[key].RemoveAll(e => string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
+            if (Data.Days[key].Count == 0) Data.Days.Remove(key);
+        }
+        foreach (var key in Data.Templates.Keys.ToList())
+        {
+            Data.Templates[key].RemoveAll(e => string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
+            if (Data.Templates[key].Count == 0) Data.Templates.Remove(key);
+        }
+        await PersistAsync();
+    }
+
+    // ---------- Recipes ----------
+
+    /// <summary>Add or update a recipe. <paramref name="originalName"/> is non-null when editing an existing recipe.</summary>
+    public async Task<string?> UpsertRecipeAsync(Recipe recipe, string? originalName)
+    {
+        var name = recipe.Name?.Trim() ?? "";
+        if (name.Length == 0) return "Name is required.";
+        if (recipe.Servings <= 0) return "Servings must be greater than zero.";
+        recipe.Name = name;
+
+        var duplicate = Data.Recipes.FirstOrDefault(r =>
+            string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(r.Name, originalName, StringComparison.OrdinalIgnoreCase));
+        if (duplicate is not null) return $"A recipe named \"{duplicate.Name}\" already exists. Names must be unique.";
+        if (FindItem(name) is { } itemDup) return $"An item named \"{itemDup.Name}\" already exists. Names must be unique across items and recipes.";
+
+        if (originalName is null)
+        {
+            Data.Recipes.Add(recipe);
+        }
+        else
+        {
+            var existing = FindRecipe(originalName);
+            if (existing is null)
+            {
+                Data.Recipes.Add(recipe);
+            }
+            else
+            {
+                var idx = Data.Recipes.IndexOf(existing);
+                Data.Recipes[idx] = recipe;
+                if (!string.Equals(originalName, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Keep schedule and template entries pointing at the renamed recipe.
+                    foreach (var list in Data.Days.Values.Concat(Data.Templates.Values))
+                        foreach (var e in list.Where(e => string.Equals(e.ItemName, originalName, StringComparison.OrdinalIgnoreCase)))
+                            e.ItemName = name;
+                }
+            }
+        }
+
+        Data.Recipes.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        await PersistAsync();
+        return null;
+    }
+
+    public async Task DeleteRecipeAsync(string name)
+    {
+        Data.Recipes.RemoveAll(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
         foreach (var key in Data.Days.Keys.ToList())
         {
             Data.Days[key].RemoveAll(e => string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
@@ -296,7 +373,7 @@ public class AppState(LocalStore store)
     {
         foreach (var entry in GetDay(date))
         {
-            var item = FindItem(entry.ItemName);
+            var item = ResolveItem(entry.ItemName);
             if (item is not null) totals.Add(item, entry.Servings);
         }
     }
@@ -316,8 +393,8 @@ public class AppState(LocalStore store)
         if (targets.Calories <= 0) return ("Calorie target must be greater than zero.", null);
         if (endInclusive < start) return ("End date must be on or after the start date.", null);
 
-        var pool = Data.Items.Where(IsRandomEligible).ToList();
-        if (pool.Count == 0) return ("Random generation needs at least one menu item with calories greater than zero that isn't excluded from randomize.", null);
+        var pool = AllMenuItems().Where(IsRandomEligible).ToList();
+        if (pool.Count == 0) return ("Random generation needs at least one menu item or recipe with calories greater than zero that isn't excluded from randomize.", null);
 
         var rng = new Random();
         int generated = 0, missed = 0;

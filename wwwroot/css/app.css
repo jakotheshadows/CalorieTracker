@@ -372,6 +372,24 @@ textarea.input { resize: vertical; }
 }
 .modal-actions { justify-content: flex-end; margin-top: 1.25rem; }
 .modal-narrow { max-width: 430px; }
+.modal-wide { max-width: 800px; }
+
+/* ---------- Recipes ---------- */
+
+.tab-bar { display: flex; gap: .25rem; margin-bottom: 1rem; }
+
+.ing-form {
+    margin-top: .75rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: .75rem;
+    background: var(--bg);
+}
+.ing-form > .section-label:first-child { margin-top: 0; }
+.ing-form .input-pair .input { flex: 1; width: auto; min-width: 0; }
+
+.recipe-totals { margin-top: .25rem; }
+.total-accent { color: var(--accent); font-weight: 600; }
 
 .alert-error {
     background: rgba(224, 102, 102, .12);

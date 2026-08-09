@@ -1,0 +1,163 @@
+@inject UsdaService Usda
+@inject NavigationManager Nav
+
+@* USDA FoodData Central search panel. The parent renders it when open; every result click
+   or serving change fires OnApplied with the food rescaled to the chosen serving. *@
+<div class="usda-panel">
+    @if (!_hasKey)
+    {
+        <p class="muted small">
+            Nutrition lookup searches the USDA FoodData Central database and fills in calories,
+            macros, and micros for you. It needs a free API key — about a minute to set up
+            (instructions are on the Settings page).
+        </p>
+        <div class="btn-row">
+            <button class="btn btn-accent" @onclick="@(() => Nav.NavigateTo("settings"))">Set up in Settings</button>
+            <button class="btn" @onclick="CloseAsync">Close</button>
+        </div>
+    }
+    else
+    {
+        <div class="usda-search-row">
+            <input class="input" placeholder="Search foods, brands…" @bind="_query" @bind:event="oninput" @onkeydown="OnKeyDown" />
+            <button class="btn btn-accent" disabled="@_busy" @onclick="SearchAsync">@(_busy ? "Searching…" : "Search")</button>
+            <button class="btn" @onclick="CloseAsync">Close</button>
+        </div>
+        @if (_error is not null)
+        {
+            <div class="alert-error">@_error</div>
+        }
+        @if (_applied is not null)
+        {
+            <div class="alert-ok">@_applied</div>
+        }
+        @if (_selected is not null)
+        {
+            <div class="usda-serving-row">
+                <span class="muted small">My serving is:</span>
+                <input class="input input-sm serving-amount" type="number" step="any" min="0"
+                       value="@_servAmount" @onchange="e => OnServingAmountChangedAsync(e.Value?.ToString())" />
+                <select class="input serving-unit" value="@_servUnit" @onchange="e => OnServingUnitChangedAsync(e.Value?.ToString())">
+                    @foreach (var unit in UsdaService.UnitsForBase(_selected.BaseUnit))
+                    {
+                        <option value="@unit">@unit</option>
+                    }
+                </select>
+                <span class="muted small">— nutrition rescales automatically</span>
+            </div>
+        }
+        @if (_results is not null)
+        {
+            @if (_results.Count == 0)
+            {
+                <p class="muted small">No matches — try fewer or different words.</p>
+            }
+            else
+            {
+                <ul class="usda-results">
+                    @foreach (var f in _results)
+                    {
+                        <li @key="f.FdcId" @onclick="() => ApplyAsync(f)" title="Click to fill the form with this food's nutrition">
+                            <div class="usda-line1">
+                                <span class="item-name">@f.Description</span>
+                                <span class="num">@(f.CaloriesFor(f.DefaultAmount) is { } kcal ? $"{kcal:N0} kcal" : "—")</span>
+                            </div>
+                            <div class="muted small">@(f.Brand is null ? f.DataType : $"{f.Brand} · {f.DataType}") · per @f.DefaultServingDisplay</div>
+                        </li>
+                    }
+                </ul>
+                <p class="muted small">Click a result to fill the form — you can adjust anything before saving.</p>
+            }
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public string? InitialQuery { get; set; }
+    [Parameter] public EventCallback<UsdaApplied> OnApplied { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private bool _hasKey;
+    private string _query = "";
+    private bool _busy;
+    private string? _error;
+    private string? _applied;
+    private List<UsdaFood>? _results;
+    private UsdaFood? _selected;
+    private double _servAmount;
+    private string _servUnit = "g";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _hasKey = await Usda.GetApiKeyAsync() is not null;
+        if (_hasKey && !string.IsNullOrWhiteSpace(InitialQuery))
+            _query = InitialQuery;
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SearchAsync();
+    }
+
+    private async Task SearchAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        _applied = null;
+        _results = null;
+        _selected = null;
+        (_results, _error) = await Usda.SearchAsync(_query);
+        _busy = false;
+    }
+
+    private async Task ApplyAsync(UsdaFood food)
+    {
+        _selected = food;
+        _servAmount = food.DefaultAmount;
+        _servUnit = food.BaseUnit;
+        await FireAppliedAsync();
+    }
+
+    private async Task OnServingAmountChangedAsync(string? raw)
+    {
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            _servAmount = v;
+        await FireAppliedAsync();
+    }
+
+    private async Task OnServingUnitChangedAsync(string? unit)
+    {
+        if (!string.IsNullOrEmpty(unit)) _servUnit = unit;
+        await FireAppliedAsync();
+    }
+
+    private async Task FireAppliedAsync()
+    {
+        if (_selected is null) return;
+        var baseAmount = UsdaService.ToBaseAmount(_servAmount, _servUnit, _selected.BaseUnit);
+        if (baseAmount is null)
+        {
+            _error = "Enter a serving amount greater than zero.";
+            return;
+        }
+        _error = null;
+        var text = ServingText(baseAmount.Value);
+        _applied = $"Filled from “{_selected.Description}” at {text} — adjust the serving above to rescale.";
+        await OnApplied.InvokeAsync(new UsdaApplied(_selected, _servAmount, _servUnit, baseAmount.Value, text));
+    }
+
+    private string ServingText(double baseAmount)
+    {
+        var food = _selected!;
+        // The unmodified label serving keeps its household text, e.g. "0.5 cup (113 g)".
+        if (food.LabelServingAmount is not null && _servUnit == food.BaseUnit &&
+            Math.Abs(_servAmount - food.LabelServingAmount.Value) < 0.001)
+            return food.DefaultServingDisplay;
+        return _servUnit == food.BaseUnit
+            ? $"{_servAmount:0.##} {_servUnit}"
+            : $"{_servAmount:0.##} {_servUnit} ({baseAmount:0.#} {food.BaseUnit})";
+    }
+}

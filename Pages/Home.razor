@@ -30,7 +30,7 @@
             <ul class="plain-list">
                 @foreach (var e in entries)
                 {
-                    var item = State.FindItem(e.ItemName);
+                    var item = State.ResolveItem(e.ItemName);
                     <li>
                         <span>@e.ItemName <span class="muted">× @e.Servings.ToString("0.##")</span></span>
                         <span class="num">@(item?.Calories is null ? "—" : ((item.Calories.Value * e.Servings).ToString("N0") + " kcal"))</span>
@@ -111,7 +111,7 @@
                 <span class="stat-label">days planned</span>
             </div>
             <div class="stat">
-                <span class="stat-value">@State.Data.Items.Count</span>
+                <span class="stat-value">@(State.Data.Items.Count + State.Data.Recipes.Count)</span>
                 <span class="stat-label">menu items</span>
             </div>
         </div>
