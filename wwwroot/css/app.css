@@ -280,6 +280,9 @@ textarea.input { resize: vertical; }
 
 .goal-number { font-size: 2.2rem; font-weight: 800; color: var(--accent); line-height: 1.1; margin: .3rem 0 .5rem; }
 .goal-unit { font-size: 1rem; font-weight: 600; color: var(--muted); }
+.goal-side-target { font-size: 1.5rem; font-weight: 800; color: var(--accent); margin: .2rem 0 .4rem; }
+.goal-delta-ok { color: var(--accent); margin: .3rem 0; }
+.goal-delta-over { color: var(--warn); margin: .3rem 0; }
 .add-row { display: flex; gap: .5rem; margin-top: .9rem; }
 .add-row .input { flex: 1; min-width: 0; }
 .weight-list { margin-top: .75rem; }

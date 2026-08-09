@@ -207,6 +207,41 @@
 
     <aside class="sched-side">
         <TotalsPanel Title="@TotalsTitle()" Totals="@RangeTotals()" DayCount="@RangeDayCount()" />
+        @if (State.GetGoalStatus() is { } goal)
+        {
+            var totals = RangeTotals();
+            var plannedDays = _view == ViewMode.Day ? (totals.EntryCount > 0 ? 1 : 0) : totals.DaysWithEntries;
+            var delta = totals.Calories - goal.SuggestedCalories * plannedDays;
+            <div class="card goal-side">
+                <h3>🎯 Goal</h3>
+                <div class="goal-side-target">@goal.SuggestedCalories.ToString("N0") <span class="goal-unit">kcal / day</span></div>
+                @if (plannedDays > 0)
+                {
+                    @if (Math.Abs(delta) <= goal.SuggestedCalories * plannedDays * 0.05)
+                    {
+                        <p class="small goal-delta-ok">On target across @plannedDays planned day(s).</p>
+                    }
+                    else if (delta > 0)
+                    {
+                        <p class="small goal-delta-over">@delta.ToString("N0") kcal over target across @plannedDays planned day(s).</p>
+                    }
+                    else
+                    {
+                        <p class="small goal-delta-ok">@((-delta).ToString("N0")) kcal under target across @plannedDays planned day(s).</p>
+                    }
+                }
+                @if (!goal.AtTarget)
+                {
+                    <p class="muted tiny">
+                        Pace: @FormatGoalRate(goal.KgPerWeek)/week@(goal.Eta is not null ? $" · target around {goal.Eta.Value:MMM d, yyyy}" : "")
+                    </p>
+                }
+                else
+                {
+                    <p class="muted tiny">Maintaining current weight.</p>
+                }
+            </div>
+        }
     </aside>
 </div>
 
@@ -391,6 +426,10 @@
         ViewMode.Week => $"{AppState.WeekStart(_date):MMM d} – {AppState.WeekStart(_date).AddDays(6):MMM d, yyyy}",
         _ => _date.ToString("MMMM yyyy"),
     };
+
+    private string FormatGoalRate(double kgPerWeek) => State.Data.Goals?.Units == UnitSystem.Metric
+        ? $"{kgPerWeek:0.00} kg"
+        : $"{GoalMath.KgToLb(kgPerWeek):0.0} lb";
 
     private string TotalsTitle() => _view switch
     {
