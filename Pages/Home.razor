@@ -76,6 +76,11 @@
                             : $"Today's plan is {-delta:N0} kcal under target.")
                 </p>
             }
+            var daysSince = Today.DayNumber - goal.LatestWeightDate.DayNumber;
+            @if (daysSince >= 7)
+            {
+                <div class="alert-warn">⚖️ It's been @daysSince days since your last weigh-in — log one so your calorie target stays accurate.</div>
+            }
             <div class="add-row">
                 <input type="number" class="input" min="1" step="0.1" placeholder="Today's weight (@WeightUnit)" @bind="_quickWeight" />
                 <button class="btn btn-accent" disabled="@(_quickWeight is null or <= 0)" @onclick="QuickLogAsync">Log</button>

@@ -207,7 +207,7 @@ else
                     </div>
                     <div class="stat">
                         <span class="stat-value">@FormatWeight(status.LatestWeightKg)</span>
-                        <span class="stat-label">last weigh-in (@status.LatestWeightDate.ToString("MMM d"))</span>
+                        <span class="stat-label">last weigh-in (@status.LatestWeightDate.ToString("MMM d, yyyy"))</span>
                     </div>
                     <div class="stat">
                         <span class="stat-value">@status.Bmi.ToString("0.0")</span>
@@ -215,6 +215,11 @@ else
                     </div>
                 </div>
                 <p class="muted tiny">Trend weight smooths out daily water-weight noise — judge progress by the trend, never a single morning.</p>
+
+                @if (DaysSinceWeighIn(status) >= 7)
+                {
+                    <div class="alert-warn">⚖️ It's been @DaysSinceWeighIn(status) days since your last weigh-in — log one so your calorie target stays accurate.</div>
+                }
 
                 <div class="add-row">
                     <input type="number" class="input" min="1" step="0.1" placeholder="Today's weight (@WeightUnit)" @bind="_quickWeight" />
@@ -227,7 +232,7 @@ else
                         @foreach (var (date, kg) in RecentWeights())
                         {
                             <li>
-                                <span>@date.ToString("ddd, MMM d")</span>
+                                <span>@date.ToString("ddd, MMM d, yyyy")</span>
                                 <span class="num">@FormatWeight(kg)
                                     <button class="icon-btn" title="Remove entry" @onclick="() => RemoveWeightAsync(date)">✕</button>
                                 </span>
@@ -238,7 +243,7 @@ else
             </div>
 
             <div class="card">
-                <h3>The fine print</h3>
+                <h3>Disclaimer</h3>
                 <p class="muted small">
                     CalTrack is not medical advice. Calorie needs vary person to person, and these numbers are
                     estimates that improve with data but are never perfect. If you are pregnant or breastfeeding,
@@ -385,6 +390,9 @@ else
             await State.LogWeightAsync(Today, FromDisplay(_formWeight.Value));
         _editing = false;
     }
+
+    private static int DaysSinceWeighIn(GoalStatus status) =>
+        Today.DayNumber - status.LatestWeightDate.DayNumber;
 
     private async Task QuickLogAsync()
     {
