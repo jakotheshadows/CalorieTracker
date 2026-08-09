@@ -265,6 +265,10 @@
                 <label class="field">
                     <span>Calories / day <b class="req">*</b></span>
                     <input class="input" type="number" step="any" min="1" @bind="_targets.Calories" />
+                    @if (_randFromGoal)
+                    {
+                        <span class="muted tiny">Prefilled from your goal target 🎯</span>
+                    }
                 </label>
                 <label class="field">
                     <span>Tolerance (±%)</span>
@@ -349,6 +353,7 @@
     private DateOnly _randStart = Today;
     private DateOnly _randEnd = Today;
     private RandomTargets _targets = new();
+    private bool _randFromGoal;
 
     protected override void OnInitialized() => State.Changed += OnChanged;
     private void OnChanged() => InvokeAsync(StateHasChanged);
@@ -484,6 +489,12 @@
         var (start, end) = VisibleRange();
         _randStart = start;
         _randEnd = end;
+        _randFromGoal = false;
+        if (State.GetGoalStatus() is { } goal)
+        {
+            _targets.Calories = Math.Round(goal.SuggestedCalories / 10) * 10;
+            _randFromGoal = true;
+        }
         _randError = null;
         _randWarning = null;
         _randDone = false;

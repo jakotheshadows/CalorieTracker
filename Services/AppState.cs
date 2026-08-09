@@ -230,6 +230,47 @@ public class AppState(LocalStore store)
         return null;
     }
 
+    // ---------- Goals & weight log ----------
+
+    public async Task LogWeightAsync(DateOnly date, double weightKg)
+    {
+        if (weightKg <= 0) return;
+        Data.Weights[AppData.DayKey(date)] = Math.Round(weightKg, 2);
+        await PersistAsync();
+    }
+
+    public async Task RemoveWeightAsync(DateOnly date)
+    {
+        if (Data.Weights.Remove(AppData.DayKey(date)))
+            await PersistAsync();
+    }
+
+    /// <summary>Save the goal profile. Rejects target weights below the healthy BMI floor.</summary>
+    public async Task<string?> SaveGoalsAsync(GoalSettings goals)
+    {
+        if (goals.HeightCm < 90 || goals.HeightCm > 250) return "Height looks out of range.";
+        var heightM = goals.HeightCm / 100.0;
+        var minHealthyKg = GoalMath.MinHealthyBmi * heightM * heightM;
+        if (goals.TargetWeightKg < minHealthyKg)
+        {
+            var min = goals.Units == UnitSystem.Imperial
+                ? $"{GoalMath.KgToLb(minHealthyKg):0} lb"
+                : $"{minHealthyKg:0.0} kg";
+            return $"That target is below the healthy range for your height (BMI {GoalMath.MinHealthyBmi}, about {min}). CalTrack won't set targets below it.";
+        }
+        goals.TargetRatePercentPerWeek = Math.Clamp(goals.TargetRatePercentPerWeek, 0, GoalMath.MaxRatePercentPerWeek);
+        Data.Goals = goals;
+        await PersistAsync();
+        return null;
+    }
+
+    /// <summary>Current goal status, or null when goals aren't set up or no weight is logged yet.</summary>
+    public GoalStatus? GetGoalStatus() =>
+        Data.Goals is null
+            ? null
+            : GoalMath.Compute(Data.Goals, Data.Weights,
+                d => TotalsForDay(d).Calories, DateOnly.FromDateTime(DateTime.Today));
+
     // ---------- Aggregation ----------
 
     public Totals TotalsForDay(DateOnly date)

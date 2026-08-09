@@ -1,0 +1,401 @@
+@page "/goals"
+@implements IDisposable
+@using CalorieTracker.Models
+@inject AppState State
+
+<PageTitle>Goals</PageTitle>
+
+<div class="page-header">
+    <h1>Goals</h1>
+    @if (State.Data.Goals is not null && !_editing)
+    {
+        <button class="btn" @onclick="BeginEdit">Edit profile &amp; goal</button>
+    }
+</div>
+
+@if (!State.Loaded)
+{
+    <p class="muted">Loading…</p>
+}
+else if (_editing || State.Data.Goals is null)
+{
+    <div class="card goal-form">
+        <h3>@(State.Data.Goals is null ? "Set up your goal" : "Profile & goal")</h3>
+        @if (State.Data.Goals is null)
+        {
+            <p class="muted small">
+                CalTrack estimates how much you burn per day (starting from a standard formula), then
+                <b>learns your real burn rate</b> from your logged weight and your scheduled meals —
+                and suggests a daily calorie target that moves you toward your goal at a safe pace.
+            </p>
+        }
+
+        @if (_formError is not null)
+        {
+            <div class="alert-error">@_formError</div>
+        }
+
+        <div class="form-grid">
+            <label class="field">
+                <span>Units</span>
+                <select class="input" value="@_form.Units" @onchange="OnUnitsChanged">
+                    <option value="Imperial">Imperial (lb, ft/in)</option>
+                    <option value="Metric">Metric (kg, cm)</option>
+                </select>
+            </label>
+            <label class="field">
+                <span>Sex (for the metabolism formula)</span>
+                <select class="input" @bind="_form.Sex">
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                </select>
+            </label>
+            <label class="field">
+                <span>Birth date</span>
+                <input type="date" class="input" @bind="_formBirth" />
+            </label>
+            @if (_form.Units == UnitSystem.Imperial)
+            {
+                <label class="field">
+                    <span>Height</span>
+                    <span class="input-pair">
+                        <input type="number" class="input" min="3" max="8" @bind="_formFeet" aria-label="feet" /> <span class="muted">ft</span>
+                        <input type="number" class="input" min="0" max="11.9" step="0.5" @bind="_formInches" aria-label="inches" /> <span class="muted">in</span>
+                    </span>
+                </label>
+            }
+            else
+            {
+                <label class="field">
+                    <span>Height (cm)</span>
+                    <input type="number" class="input" min="90" max="250" @bind="_formCm" />
+                </label>
+            }
+            <label class="field span-2">
+                <span>Activity level (outside of what you schedule here)</span>
+                <select class="input" @bind="_form.Activity">
+                    <option value="Sedentary">Sedentary — desk job, little or no exercise</option>
+                    <option value="Light">Lightly active — exercise 1–3×/week</option>
+                    <option value="Moderate">Moderately active — exercise 4–5×/week or an active job</option>
+                    <option value="Active">Very active — hard exercise 6–7×/week</option>
+                    <option value="VeryActive">Extremely active — physical job plus daily training</option>
+                </select>
+                <span class="muted tiny">Most people overestimate this — when in doubt, pick the lower one. It only affects the starting estimate; your logged data takes over from there.</span>
+            </label>
+
+            <label class="field span-2">
+                <span class="check-line">
+                    <input type="checkbox" @bind="_form.UseLeanMassFormula" />
+                    I know my body fat % — use the lean-mass formula (Katch-McArdle)
+                </span>
+                <span class="muted tiny">Better for lean or muscular people <b>if</b> the number comes from a reliable source (e.g. DEXA). Otherwise leave this off; the default (Mifflin-St Jeor) is the best-validated general formula.</span>
+            </label>
+            @if (_form.UseLeanMassFormula)
+            {
+                <label class="field">
+                    <span>Body fat %</span>
+                    <input type="number" class="input" min="3" max="60" step="0.5" @bind="_formBodyFat" />
+                </label>
+            }
+
+            <label class="field">
+                <span>Current weight (@WeightUnit) — logged for today</span>
+                <input type="number" class="input" min="1" step="0.1" @bind="_formWeight" />
+            </label>
+            <label class="field">
+                <span>Target weight (@WeightUnit)</span>
+                <input type="number" class="input" min="1" step="0.1" @bind="_formTarget" />
+            </label>
+            <label class="field span-2">
+                <span>Pace</span>
+                <select class="input" @bind="_formRate">
+                    <option value="0">Maintain current weight</option>
+                    <option value="0.25">Gentle — 0.25% of body weight per week</option>
+                    <option value="0.5">Steady — 0.5% per week (recommended)</option>
+                    <option value="0.75">Brisk — 0.75% per week</option>
+                    <option value="1">Aggressive — 1% per week (the safe maximum)</option>
+                </select>
+                <span class="muted tiny">Health authorities recommend at most 1–2 lb (0.5–1 kg) per week. CalTrack caps the pace at 1% of body weight per week and never suggests eating below @($"{GoalMath.CalorieFloor(_form.Sex):N0}") kcal/day.</span>
+            </label>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn btn-accent" @onclick="SaveAsync">Save</button>
+            @if (State.Data.Goals is not null)
+            {
+                <button class="btn" @onclick="() => _editing = false">Cancel</button>
+            }
+        </div>
+    </div>
+}
+else
+{
+    var status = State.GetGoalStatus();
+    var goals = State.Data.Goals!;
+    @if (status is null)
+    {
+        <div class="card">
+            <h3>Log a weight to get started</h3>
+            <p class="muted small">Your profile is saved, but there are no weight entries yet.</p>
+        </div>
+    }
+    else
+    {
+        <div class="settings-grid">
+            <div class="card">
+                <h3>Daily calorie target</h3>
+                <div class="goal-number">@status.SuggestedCalories.ToString("N0") <span class="goal-unit">kcal</span></div>
+                @if (status.AtTarget)
+                {
+                    <p class="muted small">🎉 You're at your target (or set to maintain) — this keeps your weight steady.</p>
+                }
+                else
+                {
+                    <p class="muted small">
+                        That's a @((status.Tdee - status.SuggestedCalories).ToString("N0")) kcal/day deficit —
+                        about <b>@FormatRate(status.KgPerWeek)/week</b>.
+                        @if (status.Eta is not null)
+                        {
+                            <span>At this pace you'd reach @FormatWeight(Math.Max(goals.TargetWeightKg, status.MinHealthyWeightKg)) around <b>@status.Eta.Value.ToString("MMMM d, yyyy")</b>.</span>
+                        }
+                    </p>
+                    @if (status.FloorApplied)
+                    {
+                        <div class="alert-warn">Your chosen pace would require eating below the safe minimum
+                        (@GoalMath.CalorieFloor(goals.Sex).ToString("N0") kcal/day), so the target is held at the minimum
+                        and the timeline stretches instead. Fastest safe pace beats fast.</div>
+                    }
+                }
+                <p class="muted tiny">The 🎲 randomizer on the Schedule page prefills this target automatically.</p>
+            </div>
+
+            <div class="card">
+                <h3>Estimated daily burn (TDEE)</h3>
+                <div class="goal-number">@status.Tdee.ToString("N0") <span class="goal-unit">kcal</span></div>
+                @if (status.ObservedTdee is null)
+                {
+                    <p class="muted small">
+                        Formula estimate (@FormulaName(goals) × activity). Once you've weighed in a few times
+                        over a week or more with meals on the schedule, CalTrack starts measuring your <i>actual</i>
+                        burn rate from how your weight responds — no formula can beat that.
+                    </p>
+                }
+                else
+                {
+                    <p class="muted small">
+                        @if (status.Confidence >= 1)
+                        {
+                            <b>Fully learned from your data</b>
+                        }
+                        else
+                        {
+                            <b>@((status.Confidence * 100).ToString("0"))% learned from your data, the rest from the @FormulaName(goals) formula</b>
+                        }
+                        <span> (@status.DataDays days of schedule + weigh-ins). Measured: @status.ObservedTdee.Value.ToString("N0") kcal ·
+                        @FormulaName(goals) formula: @status.SeedTdee.ToString("N0") kcal.</span>
+                    </p>
+                }
+                <p class="muted tiny">This assumes you eat what you schedule. Off-plan days skew the estimate — keep the schedule honest, even in hindsight.</p>
+            </div>
+
+            <div class="card">
+                <h3>Weight</h3>
+                <div class="stat-row">
+                    <div class="stat">
+                        <span class="stat-value">@FormatWeight(status.TrendWeightKg)</span>
+                        <span class="stat-label">trend weight</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">@FormatWeight(status.LatestWeightKg)</span>
+                        <span class="stat-label">last weigh-in (@status.LatestWeightDate.ToString("MMM d"))</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">@status.Bmi.ToString("0.0")</span>
+                        <span class="stat-label">BMI</span>
+                    </div>
+                </div>
+                <p class="muted tiny">Trend weight smooths out daily water-weight noise — judge progress by the trend, never a single morning.</p>
+
+                <div class="add-row">
+                    <input type="number" class="input" min="1" step="0.1" placeholder="Today's weight (@WeightUnit)" @bind="_quickWeight" />
+                    <button class="btn btn-accent" disabled="@(_quickWeight is null or <= 0)" @onclick="QuickLogAsync">Log</button>
+                </div>
+
+                @if (RecentWeights().Any())
+                {
+                    <ul class="plain-list weight-list">
+                        @foreach (var (date, kg) in RecentWeights())
+                        {
+                            <li>
+                                <span>@date.ToString("ddd, MMM d")</span>
+                                <span class="num">@FormatWeight(kg)
+                                    <button class="icon-btn" title="Remove entry" @onclick="() => RemoveWeightAsync(date)">✕</button>
+                                </span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            <div class="card">
+                <h3>The fine print</h3>
+                <p class="muted small">
+                    CalTrack is not medical advice. Calorie needs vary person to person, and these numbers are
+                    estimates that improve with data but are never perfect. If you are pregnant or breastfeeding,
+                    have a medical condition, or have a history of disordered eating, please work with a
+                    healthcare professional instead of an app. Weight loss slows naturally as you get lighter —
+                    that's physiology, not failure, and CalTrack adjusts for it automatically.
+                </p>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private bool _editing;
+    private GoalSettings _form = new();
+    private DateTime _formBirth = new(1990, 1, 1);
+    private int _formFeet = 5;
+    private double _formInches = 10;
+    private double _formCm = 178;
+    private double? _formBodyFat;
+    private double? _formWeight;
+    private double? _formTarget;
+    private string _formRate = "0.5";
+    private string? _formError;
+    private double? _quickWeight;
+
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        await State.EnsureLoadedAsync();
+    }
+
+    private string WeightUnit => _form.Units == UnitSystem.Imperial ? "lb" : "kg";
+    private UnitSystem Units => State.Data.Goals?.Units ?? _form.Units;
+
+    private string FormatWeight(double kg) => Units == UnitSystem.Imperial
+        ? $"{GoalMath.KgToLb(kg):0.#} lb"
+        : $"{kg:0.#} kg";
+
+    private string FormatRate(double kgPerWeek) => Units == UnitSystem.Imperial
+        ? $"{GoalMath.KgToLb(kgPerWeek):0.0} lb"
+        : $"{kgPerWeek:0.00} kg";
+
+    private static string FormulaName(GoalSettings g) =>
+        g.UseLeanMassFormula && g.BodyFatPercent is not null ? "Katch-McArdle" : "Mifflin-St Jeor";
+
+    private IEnumerable<(DateOnly Date, double Kg)> RecentWeights() =>
+        State.Data.Weights
+            .Select(kv => (Ok: DateOnly.TryParse(kv.Key, out var d), Date: d, Kg: kv.Value))
+            .Where(p => p.Ok)
+            .OrderByDescending(p => p.Date)
+            .Take(10)
+            .Select(p => (p.Date, p.Kg));
+
+    private void BeginEdit()
+    {
+        var g = State.Data.Goals!;
+        _form = new GoalSettings
+        {
+            Units = g.Units,
+            Sex = g.Sex,
+            BirthDate = g.BirthDate,
+            HeightCm = g.HeightCm,
+            Activity = g.Activity,
+            UseLeanMassFormula = g.UseLeanMassFormula,
+            BodyFatPercent = g.BodyFatPercent,
+            TargetWeightKg = g.TargetWeightKg,
+            TargetRatePercentPerWeek = g.TargetRatePercentPerWeek,
+        };
+        _formBirth = g.BirthDate.ToDateTime(TimeOnly.MinValue);
+        _formBodyFat = g.BodyFatPercent;
+        _formRate = g.TargetRatePercentPerWeek.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        SetHeightFields(g.HeightCm);
+        _formTarget = ToDisplay(g.TargetWeightKg);
+        var latest = RecentWeights().FirstOrDefault();
+        _formWeight = latest.Kg > 0 ? ToDisplay(latest.Kg) : null;
+        _formError = null;
+        _editing = true;
+    }
+
+    private double? ToDisplay(double kg) =>
+        Math.Round(_form.Units == UnitSystem.Imperial ? GoalMath.KgToLb(kg) : kg, 1);
+
+    private double FromDisplay(double value) =>
+        _form.Units == UnitSystem.Imperial ? GoalMath.LbToKg(value) : value;
+
+    private void SetHeightFields(double cm)
+    {
+        _formCm = Math.Round(cm, 1);
+        var totalInches = cm / 2.54;
+        _formFeet = (int)(totalInches / 12);
+        _formInches = Math.Round(totalInches - _formFeet * 12, 1);
+    }
+
+    private void OnUnitsChanged(ChangeEventArgs e)
+    {
+        var newUnits = Enum.Parse<UnitSystem>((string)e.Value!);
+        if (newUnits == _form.Units) return;
+        // Convert the display values in place so nothing the user typed is lost.
+        var weightKg = _formWeight is > 0 ? FromDisplay(_formWeight.Value) : (double?)null;
+        var targetKg = _formTarget is > 0 ? FromDisplay(_formTarget.Value) : (double?)null;
+        var heightCm = _form.Units == UnitSystem.Imperial ? (_formFeet * 12 + _formInches) * 2.54 : _formCm;
+        _form.Units = newUnits;
+        _formWeight = weightKg is null ? null : ToDisplay(weightKg.Value);
+        _formTarget = targetKg is null ? null : ToDisplay(targetKg.Value);
+        SetHeightFields(heightCm);
+    }
+
+    private async Task SaveAsync()
+    {
+        _formError = null;
+        _form.HeightCm = _form.Units == UnitSystem.Imperial
+            ? (_formFeet * 12 + _formInches) * 2.54
+            : _formCm;
+        _form.BirthDate = DateOnly.FromDateTime(_formBirth);
+        _form.BodyFatPercent = _form.UseLeanMassFormula ? _formBodyFat : null;
+        if (_form.UseLeanMassFormula && _formBodyFat is not (> 0 and < 70))
+        {
+            _formError = "The lean-mass formula needs a body fat percentage (or untick it to use Mifflin-St Jeor).";
+            return;
+        }
+        if (_formWeight is not > 0 && !State.Data.Weights.Any())
+        {
+            _formError = "Enter your current weight so CalTrack has a starting point.";
+            return;
+        }
+        if (_formTarget is not > 0)
+        {
+            _formError = "Enter a target weight (it can equal your current weight to maintain).";
+            return;
+        }
+        _form.TargetWeightKg = FromDisplay(_formTarget.Value);
+        _form.TargetRatePercentPerWeek = double.Parse(_formRate, System.Globalization.CultureInfo.InvariantCulture);
+
+        var error = await State.SaveGoalsAsync(_form);
+        if (error is not null)
+        {
+            _formError = error;
+            return;
+        }
+        if (_formWeight is > 0)
+            await State.LogWeightAsync(Today, FromDisplay(_formWeight.Value));
+        _editing = false;
+    }
+
+    private async Task QuickLogAsync()
+    {
+        if (_quickWeight is not > 0) return;
+        var kg = Units == UnitSystem.Imperial ? GoalMath.LbToKg(_quickWeight.Value) : _quickWeight.Value;
+        await State.LogWeightAsync(Today, kg);
+        _quickWeight = null;
+    }
+
+    private async Task RemoveWeightAsync(DateOnly date) => await State.RemoveWeightAsync(date);
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+}

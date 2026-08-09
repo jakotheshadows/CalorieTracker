@@ -18,6 +18,12 @@ public class AppData
     /// <summary>Reusable day plans keyed by template name (unique, case-insensitive).</summary>
     public Dictionary<string, List<ScheduleEntry>> Templates { get; set; } = new();
 
+    /// <summary>Body weight log in kilograms, keyed "yyyy-MM-dd" (one entry per day).</summary>
+    public Dictionary<string, double> Weights { get; set; } = new();
+
+    /// <summary>Profile + weight goal; null until the user sets goals up.</summary>
+    public GoalSettings? Goals { get; set; }
+
     public static string DayKey(DateOnly d) => d.ToString("yyyy-MM-dd");
 }
 
