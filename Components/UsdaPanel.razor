@@ -1,8 +1,10 @@
 @inject UsdaService Usda
 @inject NavigationManager Nav
 
-@* USDA FoodData Central search panel. The parent renders it when open; every result click
-   or serving change fires OnApplied with the food rescaled to the chosen serving. *@
+@* USDA FoodData Central results panel. The parent's name field is the search query:
+   opening the panel searches immediately, and the parent re-triggers SearchAsync via
+   @ref when its search button is clicked again. Every result click or serving change
+   fires OnApplied with the food rescaled to the chosen serving. *@
 <div class="usda-panel">
     @if (!_hasKey)
     {
@@ -18,9 +20,15 @@
     }
     else
     {
-        <div class="usda-search-row">
-            <input class="input" placeholder="Search foods, brands…" @bind="_query" @bind:event="oninput" @onkeydown="OnKeyDown" />
-            <button class="btn btn-accent" disabled="@_busy" @onclick="SearchAsync">@(_busy ? "Searching…" : "Search")</button>
+        <div class="usda-search-row usda-status-row">
+            <span class="muted small">
+                @(_busy
+                    ? "Searching USDA…"
+                    : _lastQuery is null
+                        ? "Type a name in the field above, then hit 🔎 Search USDA."
+                        : $"USDA results for “{_lastQuery}”")
+            </span>
+            <span class="spacer"></span>
             <button class="btn" @onclick="CloseAsync">Close</button>
         </div>
         @if (_error is not null)
@@ -50,7 +58,7 @@
         {
             @if (_results.Count == 0)
             {
-                <p class="muted small">No matches — try fewer or different words.</p>
+                <p class="muted small">No matches — change the name and hit 🔎 Search USDA again.</p>
             }
             else
             {
@@ -73,13 +81,14 @@
 </div>
 
 @code {
-    [Parameter] public string? InitialQuery { get; set; }
+    /// <summary>The search text at open time (the parent's name field).</summary>
+    [Parameter] public string? Query { get; set; }
     [Parameter] public EventCallback<UsdaApplied> OnApplied { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
     private bool _hasKey;
-    private string _query = "";
     private bool _busy;
+    private string? _lastQuery;
     private string? _error;
     private string? _applied;
     private List<UsdaFood>? _results;
@@ -90,28 +99,39 @@
     protected override async Task OnInitializedAsync()
     {
         _hasKey = await Usda.GetApiKeyAsync() is not null;
-        if (_hasKey && !string.IsNullOrWhiteSpace(InitialQuery))
-            _query = InitialQuery;
+        if (_hasKey && !string.IsNullOrWhiteSpace(Query))
+            await SearchAsync(Query);
     }
 
-    private Task CloseAsync() => OnClose.InvokeAsync();
-
-    private async Task OnKeyDown(KeyboardEventArgs e)
+    /// <summary>Run a search. Called on open and by the parent (via @ref) on later button clicks.</summary>
+    public async Task SearchAsync(string? query)
     {
-        if (e.Key == "Enter") await SearchAsync();
-    }
+        if (!_hasKey || _busy) return;
+        query = query?.Trim() ?? "";
+        if (query.Length == 0)
+        {
+            _lastQuery = null;
+            _results = null;
+            _selected = null;
+            _error = null;
+            _applied = null;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
 
-    private async Task SearchAsync()
-    {
-        if (_busy) return;
         _busy = true;
+        _lastQuery = query;
         _error = null;
         _applied = null;
         _results = null;
         _selected = null;
-        (_results, _error) = await Usda.SearchAsync(_query);
+        await InvokeAsync(StateHasChanged);
+        (_results, _error) = await Usda.SearchAsync(query);
         _busy = false;
+        await InvokeAsync(StateHasChanged);
     }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
 
     private async Task ApplyAsync(UsdaFood food)
     {

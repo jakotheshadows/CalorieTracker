@@ -185,7 +185,7 @@ else
                     <span>Name <b class="req">*</b></span>
                     <div class="name-row">
                         <input class="input" @bind="_editing.Name" placeholder="e.g. Grilled chicken breast" />
-                        <button class="btn" type="button" title="Auto-fill nutrition facts from the USDA food database" @onclick="() => _usdaOpen = true">🔎 Search USDA</button>
+                        <button class="btn" type="button" title="Search the USDA food database for this name and auto-fill nutrition facts" @onclick="ItemUsdaSearchAsync">🔎 Search USDA</button>
                     </div>
                 </label>
                 <label class="field">
@@ -216,7 +216,7 @@ else
 
             @if (_usdaOpen)
             {
-                <UsdaPanel InitialQuery="@_editing.Name" OnApplied="OnItemUsdaApplied" OnClose="() => _usdaOpen = false" />
+                <UsdaPanel @ref="_itemUsdaPanel" Query="@_editing.Name" OnApplied="OnItemUsdaApplied" OnClose="() => _usdaOpen = false" />
             }
 
             <h4 class="section-label">Macronutrients <span class="muted small">(per serving, optional)</span></h4>
@@ -337,7 +337,7 @@ else
                         <span>Ingredient <b class="req">*</b></span>
                         <div class="name-row">
                             <input class="input" @bind="_ing.Name" placeholder="e.g. Ground turkey" />
-                            <button class="btn" type="button" title="Auto-fill nutrition from the USDA food database" @onclick="() => _ingUsdaOpen = true">🔎 Search USDA</button>
+                            <button class="btn" type="button" title="Search the USDA food database for this name and auto-fill nutrition" @onclick="IngredientUsdaSearchAsync">🔎 Search USDA</button>
                         </div>
                     </label>
                     <label class="field">
@@ -362,7 +362,7 @@ else
 
                 @if (_ingUsdaOpen)
                 {
-                    <UsdaPanel InitialQuery="@_ing.Name" OnApplied="OnIngredientUsdaApplied" OnClose="() => _ingUsdaOpen = false" />
+                    <UsdaPanel @ref="_ingUsdaPanel" Query="@_ing.Name" OnApplied="OnIngredientUsdaApplied" OnClose="() => _ingUsdaOpen = false" />
                 }
 
                 <h4 class="section-label">Macronutrients <span class="muted small">(for this amount, optional)</span></h4>
@@ -461,6 +461,7 @@ else
     private string? _error;
     private bool _microsOpen;
     private bool _usdaOpen;
+    private UsdaPanel? _itemUsdaPanel;
 
     private Recipe? _recipe;
     private string? _recipeOriginalName;
@@ -471,6 +472,7 @@ else
     private bool _ingMicrosOpen;
     private bool _ingUsdaOpen;
     private int? _ingUsdaFdcId;
+    private UsdaPanel? _ingUsdaPanel;
 
     protected override void OnInitialized() => State.Changed += OnChanged;
     private void OnChanged() => InvokeAsync(StateHasChanged);
@@ -528,6 +530,13 @@ else
         _editing = null;
         _error = null;
         _usdaOpen = false;
+    }
+
+    // First click opens the panel, which searches the name on init; later clicks re-search.
+    private async Task ItemUsdaSearchAsync()
+    {
+        if (!_usdaOpen) _usdaOpen = true;
+        else if (_itemUsdaPanel is not null) await _itemUsdaPanel.SearchAsync(_editing?.Name);
     }
 
     private void OnItemUsdaApplied(UsdaApplied a)
@@ -638,6 +647,12 @@ else
     }
 
     private void AddOrUpdateIngredient() => _ingError = CommitIngredient();
+
+    private async Task IngredientUsdaSearchAsync()
+    {
+        if (!_ingUsdaOpen) _ingUsdaOpen = true;
+        else if (_ingUsdaPanel is not null) await _ingUsdaPanel.SearchAsync(_ing.Name);
+    }
 
     private void OnIngredientUsdaApplied(UsdaApplied a)
     {
