@@ -68,13 +68,26 @@
             </div>
             @if (planned > 0)
             {
-                <p class="muted small">
-                    @(Math.Abs(delta) <= goal.SuggestedCalories * 0.05
-                        ? "🎯 Today's plan is right on target."
-                        : delta > 0
+                @if (Math.Abs(delta) <= goal.SuggestedCalories * 0.05)
+                {
+                    var dir = delta >= 0 ? "over" : "under";
+                    <p class="muted small">
+                        🎯 Today's plan is right on target.
+                        <span class="info-tip" tabindex="0">ⓘ<span class="tip-text">
+                            “On target” means today's plan is within ±5%
+                            (±@((goal.SuggestedCalories * 0.05).ToString("N0")) kcal) of your target.
+                            This plan is @Math.Abs(delta).ToString("N0") kcal @dir the target.
+                        </span></span>
+                    </p>
+                }
+                else
+                {
+                    <p class="muted small">
+                        @(delta > 0
                             ? $"Today's plan is {delta:N0} kcal over target."
                             : $"Today's plan is {-delta:N0} kcal under target.")
-                </p>
+                    </p>
+                }
             }
             var daysSince = Today.DayNumber - goal.LatestWeightDate.DayNumber;
             @if (daysSince >= 7)

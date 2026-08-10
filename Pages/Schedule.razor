@@ -237,7 +237,17 @@
                 {
                     @if (Math.Abs(delta) <= goal.SuggestedCalories * plannedDays * 0.05)
                     {
-                        <p class="small goal-delta-ok">On target across @plannedDays planned day(s).</p>
+                        var band = goal.SuggestedCalories * plannedDays * 0.05;
+                        var dir = delta >= 0 ? "over" : "under";
+                        <p class="small goal-delta-ok">
+                            On target across @plannedDays planned day(s).
+                            <span class="info-tip" tabindex="0">ⓘ<span class="tip-text">
+                                “On target” means the planned total is within ±5%
+                                (±@band.ToString("N0") kcal) of your target for the planned day(s).
+                                This plan is @Math.Abs(delta).ToString("N0") kcal @dir the target
+                                — about @((Math.Abs(delta) / plannedDays).ToString("N0")) kcal/day @dir.
+                            </span></span>
+                        </p>
                     }
                     else if (delta > 0)
                     {
