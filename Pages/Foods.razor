@@ -476,6 +476,7 @@ else
     private string? _ingError;
     private bool _ingMicrosOpen;
     private bool _ingUsdaOpen;
+    private int? _ingUsdaFdcId;
 
     protected override void OnInitialized() => State.Changed += OnChanged;
     private void OnChanged() => InvokeAsync(StateHasChanged);
@@ -605,6 +606,7 @@ else
         _ingError = null;
         _ingMicrosOpen = false;
         _ingUsdaOpen = false;
+        _ingUsdaFdcId = null;
     }
 
     private void EditIngredient(int index)
@@ -615,6 +617,7 @@ else
         _ingError = null;
         _ingMicrosOpen = NutrientCatalog.Micros.Any(m => _ing.NutrientsPer100.ContainsKey(m.Key));
         _ingUsdaOpen = false;
+        _ingUsdaFdcId = null;
     }
 
     private void RemoveIngredient(int index)
@@ -644,7 +647,13 @@ else
 
     private void OnIngredientUsdaApplied(UsdaApplied a)
     {
-        if (string.IsNullOrWhiteSpace(_ing.Name)) _ing.Name = a.Food.Description;
+        // Fill the name when a result is picked; a later serving rescale of the same
+        // food must not clobber a hand-edited name.
+        if (a.Food.FdcId != _ingUsdaFdcId)
+        {
+            _ing.Name = a.Food.Description;
+            _ingUsdaFdcId = a.Food.FdcId;
+        }
         _ing.Amount = a.Amount;
         _ing.Unit = a.Unit;
         _ing.CaloriesPer100 = a.Food.CaloriesPer100;
