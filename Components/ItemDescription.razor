@@ -1,0 +1,31 @@
+@using Markdig
+@* Renders an item/recipe description as markdown. Long descriptions start collapsed
+   behind a Show more / Show less toggle. Raw HTML in the text is escaped (DisableHtml),
+   so imported data can't inject markup. *@
+@if (!string.IsNullOrWhiteSpace(Text))
+{
+    <div class="muted small item-desc md @(IsLong && !_expanded ? "clamped" : "")">@_html</div>
+    @if (IsLong)
+    {
+        <button type="button" class="btn-link" @onclick="() => _expanded = !_expanded">
+            @(_expanded ? "Show less ▲" : "Show more ▼")
+        </button>
+    }
+}
+
+@code {
+    private const int ClampThreshold = 200;
+
+    private static readonly MarkdownPipeline Pipeline =
+        new MarkdownPipelineBuilder().DisableHtml().Build();
+
+    [Parameter] public string? Text { get; set; }
+
+    private bool _expanded;
+    private MarkupString _html;
+
+    private bool IsLong => Text is { } t && (t.Length > ClampThreshold || t.Count(c => c == '\n') > 2);
+
+    protected override void OnParametersSet() =>
+        _html = (MarkupString)Markdown.ToHtml(Text ?? "", Pipeline);
+}

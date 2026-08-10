@@ -74,10 +74,7 @@
                                 {
                                     <span class="badge badge-norand" title="Excluded from random generation">no 🎲</span>
                                 }
-                                @if (!string.IsNullOrWhiteSpace(item.Description))
-                                {
-                                    <div class="muted small item-desc">@item.Description</div>
-                                }
+                                <ItemDescription Text="@item.Description" />
                             </td>
                             <td><span class="badge badge-@item.Category.ToString().ToLowerInvariant()">@item.Category</span></td>
                             <td class="muted">@(item.ServingSize ?? "—")</td>
@@ -144,10 +141,7 @@ else
                                 {
                                     <span class="badge badge-norand" title="Excluded from random generation">no 🎲</span>
                                 }
-                                @if (!string.IsNullOrWhiteSpace(recipe.Description))
-                                {
-                                    <div class="muted small item-desc">@recipe.Description</div>
-                                }
+                                <ItemDescription Text="@recipe.Description" />
                             </td>
                             <td class="num">@recipe.Servings.ToString("0.##")</td>
                             <td class="num">@recipe.Ingredients.Count</td>

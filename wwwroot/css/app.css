@@ -238,6 +238,45 @@ textarea.input { resize: vertical; }
 .data-table tbody tr:hover { background: rgba(70, 192, 122, .04); }
 .item-name { font-weight: 600; }
 .item-desc { max-width: 340px; }
+
+/* Markdown descriptions */
+.item-desc.md { line-height: 1.45; }
+.item-desc.md > :first-child { margin-top: .15rem; }
+.item-desc.md p, .item-desc.md ul, .item-desc.md ol { margin: .3rem 0; }
+.item-desc.md ul, .item-desc.md ol { padding-left: 1.2rem; }
+.item-desc.md h1, .item-desc.md h2, .item-desc.md h3,
+.item-desc.md h4, .item-desc.md h5, .item-desc.md h6 {
+    font-size: .85rem;
+    margin: .5rem 0 .2rem;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.item-desc.md blockquote { margin: .3rem 0; padding-left: .6rem; border-left: 2px solid var(--border); }
+.item-desc.md.clamped {
+    max-height: 4.4em;
+    overflow: hidden;
+    position: relative;
+}
+.item-desc.md.clamped::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 1.6em;
+    background: linear-gradient(transparent, var(--bg-2));
+    pointer-events: none;
+}
+.btn-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin-top: .15rem;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: .8rem;
+    display: block;
+}
+.btn-link:hover { text-decoration: underline; }
 .actions { text-align: right; white-space: nowrap; }
 .actions .btn { margin-left: .25rem; }
 .servings-cell .input { text-align: right; }
