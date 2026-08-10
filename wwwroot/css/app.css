@@ -225,6 +225,7 @@ textarea.input { resize: vertical; }
 
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th, .data-table td { padding: .55rem .7rem; text-align: left; }
+.data-table td { vertical-align: top; }
 .data-table th.num, .data-table td.num { text-align: right; }
 .data-table thead th {
     font-size: .75rem;
