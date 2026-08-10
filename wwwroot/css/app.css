@@ -339,6 +339,7 @@ textarea.input { resize: vertical; }
 .field { display: flex; flex-direction: column; gap: .25rem; font-size: .85rem; }
 .field > span { color: var(--muted); }
 .field.span-2 { grid-column: span 2; }
+.field.span-full { grid-column: 1 / -1; }
 @media (max-width: 600px) { .field.span-2 { grid-column: span 1; } }
 .checkbox-field { flex-direction: row; align-items: center; gap: .5rem; align-self: end; padding-bottom: .4rem; }
 .checkbox-field input { accent-color: var(--accent); width: 1rem; height: 1rem; }
