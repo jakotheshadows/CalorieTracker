@@ -466,6 +466,14 @@ textarea.input { resize: vertical; }
 .recipe-totals { margin-top: .25rem; }
 .total-accent { color: var(--accent); font-weight: 600; }
 
+.expander-cell { width: 1.6rem; padding-right: 0 !important; }
+.icon-btn.expander { font-size: .95rem; color: var(--muted); }
+.icon-btn.expander:hover { color: var(--accent); }
+.sub-row > td { background: var(--bg); }
+.sub-table { margin: .35rem 0 .5rem; }
+.sub-table th, .sub-table td { font-size: .82rem; }
+.totals-line td { border-top: 1px solid var(--border); font-weight: 600; }
+
 .alert-error {
     background: rgba(224, 102, 102, .12);
     border: 1px solid var(--danger);

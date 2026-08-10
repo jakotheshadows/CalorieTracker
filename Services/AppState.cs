@@ -192,6 +192,30 @@ public class AppState(LocalStore store)
         return null;
     }
 
+    /// <summary>Add (index null) or replace one ingredient of a recipe. Null on success.</summary>
+    public async Task<string?> SaveIngredientAsync(string recipeName, RecipeIngredient ingredient, int? index)
+    {
+        var recipe = FindRecipe(recipeName);
+        if (recipe is null) return "Recipe not found.";
+        var name = ingredient.Name?.Trim() ?? "";
+        if (name.Length == 0) return "Ingredient name is required.";
+        if (ingredient.AmountInBase is null) return "Enter an amount greater than zero.";
+        ingredient.Name = name;
+
+        if (index is { } i && i >= 0 && i < recipe.Ingredients.Count) recipe.Ingredients[i] = ingredient;
+        else recipe.Ingredients.Add(ingredient);
+        await PersistAsync();
+        return null;
+    }
+
+    public async Task RemoveIngredientAsync(string recipeName, int index)
+    {
+        var recipe = FindRecipe(recipeName);
+        if (recipe is null || index < 0 || index >= recipe.Ingredients.Count) return;
+        recipe.Ingredients.RemoveAt(index);
+        await PersistAsync();
+    }
+
     public async Task DeleteRecipeAsync(string name)
     {
         Data.Recipes.RemoveAll(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
