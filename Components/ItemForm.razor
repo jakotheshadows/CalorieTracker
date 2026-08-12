@@ -1,0 +1,70 @@
+@* Inline editor form for a menu item. The parent supplies a working copy and owns save/cancel. *@
+<div class="editor-form">
+    <h3>@(OriginalName is null ? "New menu item" : $"Edit “{OriginalName}”")</h3>
+
+    @if (Error is not null)
+    {
+        <div class="alert-error">@Error</div>
+    }
+
+    <div class="form-grid">
+        <UsdaNameField Placeholder="e.g. Grilled chicken breast" @bind-Value="Item.Name" OnApplied="OnUsdaApplied" />
+        <label class="field">
+            <span>Category</span>
+            <select class="input" @bind="Item.Category">
+                <option value="@FoodCategory.Food">Food</option>
+                <option value="@FoodCategory.Beverage">Beverage</option>
+                <option value="@FoodCategory.Snack">Snack</option>
+            </select>
+        </label>
+        <label class="field">
+            <span>Serving size</span>
+            <input class="input" @bind="Item.ServingSize" placeholder="e.g. 6 oz / 170 g" />
+        </label>
+        <label class="field span-full">
+            <span>Description</span>
+            <textarea class="input" rows="2" @bind="Item.Description" placeholder="Optional notes (markdown supported)"></textarea>
+        </label>
+        <label class="field">
+            <span>Calories (kcal)</span>
+            <input class="input" type="number" step="any" min="0" @bind="Item.Calories" />
+        </label>
+        <label class="field checkbox-field">
+            <input type="checkbox" @bind="Item.ExcludeFromRandom" />
+            <span>Exclude from randomize</span>
+        </label>
+    </div>
+
+    <NutrientFields Suffix="per serving, optional" GetValue="NutrientValue" SetValue="SetNutrient" />
+
+    <div class="btn-row editor-actions">
+        <button class="btn btn-accent" @onclick="() => OnSave.InvokeAsync()">Save</button>
+        <button class="btn" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public FoodItem Item { get; set; } = new();
+    [Parameter] public string? OriginalName { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback OnSave { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private void OnUsdaApplied(UsdaApplied a)
+    {
+        Item.ServingSize = a.ServingText;
+        Item.Calories = a.Food.CaloriesFor(a.AmountInBase);
+        Item.Nutrients = a.Food.NutrientsFor(a.AmountInBase);
+    }
+
+    private string? NutrientValue(string key) =>
+        Item.Nutrient(key)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private void SetNutrient(string key, string? raw)
+    {
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            Item.Nutrients[key] = v;
+        else
+            Item.Nutrients.Remove(key);
+    }
+}

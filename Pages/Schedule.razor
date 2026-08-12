@@ -22,6 +22,84 @@
     <button class="btn btn-accent" @onclick="OpenRandomize">🎲 Randomize…</button>
 </div>
 
+@if (_randOpen)
+{
+    <div class="card editor-card rand-card">
+        <div class="card-head-row">
+            <h3>🎲 Randomize schedule</h3>
+            <span class="spacer"></span>
+            <button class="btn" @onclick="() => _randOpen = false">Close</button>
+        </div>
+        <p class="muted small">
+            Fills each day in the range with random menu items. The calorie target is a daily
+            <b>cap</b> (tolerance sets how far a day may go over it); macro/micro targets are
+            daily <b>minimums</b>. Only items and recipes with calories &gt; 0 that aren't marked
+            “exclude from randomize” are used.
+            <b>@State.AllMenuItems().Count(AppState.IsRandomEligible)</b> of @(State.Data.Items.Count + State.Data.Recipes.Count) menu items and recipes are eligible.
+        </p>
+
+        @if (_randError is not null)
+        {
+            <div class="alert-error">@_randError</div>
+        }
+        @if (_randDone)
+        {
+            <div class="alert-ok">Schedule generated!</div>
+        }
+        @if (_randWarning is not null)
+        {
+            <div class="alert-warn">@_randWarning</div>
+        }
+
+        <div class="form-grid">
+            <label class="field">
+                <span>From</span>
+                <input class="input" type="date" @bind="_randStart" />
+            </label>
+            <label class="field">
+                <span>To</span>
+                <input class="input" type="date" @bind="_randEnd" />
+            </label>
+            <label class="field">
+                <span>Calories / day <b class="req">*</b></span>
+                <input class="input" type="number" step="any" min="1" @bind="_targets.Calories" />
+                @if (_randFromGoal)
+                {
+                    <span class="muted tiny">Prefilled from your goal target 🎯</span>
+                }
+            </label>
+            <label class="field">
+                <span>Tolerance (±%)</span>
+                <input class="input" type="number" step="any" min="1" max="50" @bind="_targets.TolerancePercent" />
+            </label>
+            <label class="field">
+                <span>Items per day (min)</span>
+                <input class="input" type="number" min="1" max="12" @bind="_targets.MinItemsPerDay" />
+            </label>
+            <label class="field">
+                <span>Items per day (max)</span>
+                <input class="input" type="number" min="1" max="12" @bind="_targets.MaxItemsPerDay" />
+            </label>
+            <label class="field">
+                <span>Max servings per item</span>
+                <input class="input" type="number" min="1" max="10" @bind="_targets.MaxServingsPerItem" />
+            </label>
+            <label class="field checkbox-field">
+                <input type="checkbox" @bind="_randOverwrite" />
+                <span>Overwrite days that already have a plan</span>
+            </label>
+        </div>
+
+        <NutrientFields MacrosLabel="Macro targets / day" MicrosLabel="Micronutrient targets / day"
+                        GetValue="TargetValue" SetValue="SetTarget" />
+
+        <div class="btn-row editor-actions">
+            <button class="btn btn-accent" @onclick="RunRandomizeAsync">Generate</button>
+            <button class="btn" @onclick="() => _randOpen = false">Close</button>
+        </div>
+    </div>
+}
+
 <div class="sched-layout">
     <div class="sched-main">
         @if (_view == ViewMode.Day)
@@ -160,6 +238,17 @@
                 {
                     <div class="alert-error template-alert">@_templateError</div>
                 }
+                @if (_confirmOverwrite)
+                {
+                    <div class="alert-warn template-alert">
+                        A template named “@_newTemplateName.Trim()” already exists.
+                        Replace it with this day's current plan?
+                        <div class="btn-row">
+                            <button class="btn btn-sm btn-accent" @onclick="ConfirmOverwriteAsync">Overwrite</button>
+                            <button class="btn btn-sm" @onclick="() => _confirmOverwrite = false">Cancel</button>
+                        </div>
+                    </div>
+                }
             </div>
         }
         else if (_view == ViewMode.Week)
@@ -272,124 +361,6 @@
         }
     </aside>
 </div>
-
-@if (_confirmOverwrite)
-{
-    <div class="modal-backdrop" @onclick="() => _confirmOverwrite = false">
-        <div class="modal-panel modal-narrow" @onclick:stopPropagation="true">
-            <h2>Overwrite template?</h2>
-            <p class="muted">
-                A template named “@_newTemplateName.Trim()” already exists.
-                Replace it with this day's current plan?
-            </p>
-            <div class="btn-row modal-actions">
-                <button class="btn btn-accent" @onclick="ConfirmOverwriteAsync">Overwrite</button>
-                <button class="btn" @onclick="() => _confirmOverwrite = false">Cancel</button>
-            </div>
-        </div>
-    </div>
-}
-
-@if (_randOpen)
-{
-    <div class="modal-backdrop" @onclick="() => _randOpen = false">
-        <div class="modal-panel" @onclick:stopPropagation="true">
-            <h2>Randomize schedule</h2>
-            <p class="muted small">
-                Fills each day in the range with random menu items. The calorie target is a daily
-                <b>cap</b> (tolerance sets how far a day may go over it); macro/micro targets are
-                daily <b>minimums</b>. Only items and recipes with calories &gt; 0 that aren't marked
-                “exclude from randomize” are used.
-                <b>@State.AllMenuItems().Count(AppState.IsRandomEligible)</b> of @(State.Data.Items.Count + State.Data.Recipes.Count) menu items and recipes are eligible.
-            </p>
-
-            @if (_randError is not null)
-            {
-                <div class="alert-error">@_randError</div>
-            }
-            @if (_randDone)
-            {
-                <div class="alert-ok">Schedule generated!</div>
-            }
-            @if (_randWarning is not null)
-            {
-                <div class="alert-warn">@_randWarning</div>
-            }
-
-            <div class="form-grid">
-                <label class="field">
-                    <span>From</span>
-                    <input class="input" type="date" @bind="_randStart" />
-                </label>
-                <label class="field">
-                    <span>To</span>
-                    <input class="input" type="date" @bind="_randEnd" />
-                </label>
-                <label class="field">
-                    <span>Calories / day <b class="req">*</b></span>
-                    <input class="input" type="number" step="any" min="1" @bind="_targets.Calories" />
-                    @if (_randFromGoal)
-                    {
-                        <span class="muted tiny">Prefilled from your goal target 🎯</span>
-                    }
-                </label>
-                <label class="field">
-                    <span>Tolerance (±%)</span>
-                    <input class="input" type="number" step="any" min="1" max="50" @bind="_targets.TolerancePercent" />
-                </label>
-                <label class="field">
-                    <span>Items per day (min)</span>
-                    <input class="input" type="number" min="1" max="12" @bind="_targets.MinItemsPerDay" />
-                </label>
-                <label class="field">
-                    <span>Items per day (max)</span>
-                    <input class="input" type="number" min="1" max="12" @bind="_targets.MaxItemsPerDay" />
-                </label>
-                <label class="field">
-                    <span>Max servings per item</span>
-                    <input class="input" type="number" min="1" max="10" @bind="_targets.MaxServingsPerItem" />
-                </label>
-                <label class="field checkbox-field">
-                    <input type="checkbox" @bind="_randOverwrite" />
-                    <span>Overwrite days that already have a plan</span>
-                </label>
-            </div>
-
-            <h4 class="section-label">Macro targets / day <span class="muted small">(optional)</span></h4>
-            <div class="form-grid nutrients-grid">
-                @foreach (var def in NutrientCatalog.Macros)
-                {
-                    <label class="field" @key="def.Key">
-                        <span>@def.Label (@def.Unit)</span>
-                        <input class="input" type="number" step="any" min="0"
-                               value="@TargetValue(def.Key)"
-                               @onchange="e => SetTarget(def.Key, e.Value?.ToString())" />
-                    </label>
-                }
-            </div>
-
-            <details class="micros-details">
-                <summary>Micronutrient targets / day <span class="muted small">(optional)</span></summary>
-                <div class="form-grid nutrients-grid">
-                    @foreach (var def in NutrientCatalog.Micros)
-                    {
-                        <label class="field" @key="def.Key">
-                            <span>@def.Label (@def.Unit)</span>
-                            <input class="input" type="number" step="any" min="0"
-                                   value="@TargetValue(def.Key)"
-                                   @onchange="e => SetTarget(def.Key, e.Value?.ToString())" />
-                        </label>
-                    }
-                </div>
-            </details>
-
-            <div class="btn-row modal-actions">
-                <button class="btn btn-accent" @onclick="RunRandomizeAsync">Generate</button>
-                <button class="btn" @onclick="() => _randOpen = false">Close</button>
-            </div>
-        </div>
-    </div>
-}
 
 @code {
     private enum ViewMode { Day, Week, Month }

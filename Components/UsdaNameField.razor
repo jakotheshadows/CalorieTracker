@@ -1,0 +1,48 @@
+@* Name input + one-click USDA search button + results panel, for any editor whose name
+   field doubles as the search query. Fills the name when a result is picked (a serving
+   rescale of the same food never clobbers a hand-edited name); the parent consumes the
+   nutrition via OnApplied. *@
+<label class="field span-2">
+    <span>@Label <b class="req">*</b></span>
+    <div class="name-row">
+        <input class="input" value="@Value" @onchange="OnNameChangedAsync" placeholder="@Placeholder" />
+        <button class="btn" type="button" title="Search the USDA food database for this name and auto-fill nutrition" @onclick="SearchClickAsync">🔎 Search USDA</button>
+    </div>
+</label>
+@if (_open)
+{
+    <div class="field span-full">
+        <UsdaPanel @ref="_panel" Query="@Value" OnApplied="HandleAppliedAsync" OnClose="() => _open = false" />
+    </div>
+}
+
+@code {
+    [Parameter] public string Label { get; set; } = "Name";
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public EventCallback<UsdaApplied> OnApplied { get; set; }
+
+    private bool _open;
+    private UsdaPanel? _panel;
+    private int? _fdcId;
+
+    private Task OnNameChangedAsync(ChangeEventArgs e) => ValueChanged.InvokeAsync(e.Value?.ToString());
+
+    // First click opens the panel, which searches the name on init; later clicks re-search.
+    private async Task SearchClickAsync()
+    {
+        if (!_open) _open = true;
+        else if (_panel is not null) await _panel.SearchAsync(Value);
+    }
+
+    private async Task HandleAppliedAsync(UsdaApplied a)
+    {
+        if (a.Food.FdcId != _fdcId)
+        {
+            _fdcId = a.Food.FdcId;
+            await ValueChanged.InvokeAsync(a.Food.Description);
+        }
+        await OnApplied.InvokeAsync(a);
+    }
+}

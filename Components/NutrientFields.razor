@@ -1,0 +1,56 @@
+@* Shared macro grid + collapsible micro grid. The parent supplies get/set callbacks,
+   so the same markup serves per-serving values, per-amount ingredient values (stored
+   per-100 behind the callbacks), and daily randomizer targets. *@
+<h4 class="section-label">@MacrosLabel <span class="muted small">(@Suffix)</span></h4>
+<div class="form-grid nutrients-grid">
+    @foreach (var def in NutrientCatalog.Macros)
+    {
+        <label class="field" @key="def.Key">
+            <span>@def.Label (@def.Unit)</span>
+            <input class="input" type="number" step="any" min="0"
+                   value="@GetValue(def.Key)"
+                   @onchange="e => SetValue(def.Key, e.Value?.ToString())" />
+        </label>
+    }
+</div>
+
+<details class="micros-details" open="@_microsOpen">
+    <summary @onclick="ToggleMicros" @onclick:preventDefault="true">
+        @MicrosLabel <span class="muted small">(@Suffix)</span>
+    </summary>
+    <div class="form-grid nutrients-grid">
+        @foreach (var def in NutrientCatalog.Micros)
+        {
+            <label class="field" @key="def.Key">
+                <span>@def.Label (@def.Unit)</span>
+                <input class="input" type="number" step="any" min="0"
+                       value="@GetValue(def.Key)"
+                       @onchange="e => SetValue(def.Key, e.Value?.ToString())" />
+            </label>
+        }
+    </div>
+</details>
+
+@code {
+    [Parameter] public string MacrosLabel { get; set; } = "Macronutrients";
+    [Parameter] public string MicrosLabel { get; set; } = "Micronutrients";
+    [Parameter] public string Suffix { get; set; } = "optional";
+    [Parameter] public Func<string, string?> GetValue { get; set; } = _ => null;
+    [Parameter] public Action<string, string?> SetValue { get; set; } = (_, _) => { };
+
+    private bool _microsOpen;
+    private bool _userToggled;
+
+    private void ToggleMicros()
+    {
+        _microsOpen = !_microsOpen;
+        _userToggled = true;
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Auto-open when micro values exist (e.g. after a USDA fill), until the user takes over.
+        if (!_userToggled)
+            _microsOpen = NutrientCatalog.Micros.Any(m => !string.IsNullOrEmpty(GetValue(m.Key)));
+    }
+}

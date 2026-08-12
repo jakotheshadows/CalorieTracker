@@ -1,0 +1,22 @@
+@* Two-click destructive action: first click arms ("Confirm?"), second fires. *@
+<button class="btn btn-sm @(_armed ? "btn-danger" : "btn-ghost-danger")" @onclick="ClickAsync">
+    @(_armed ? "Confirm?" : Label)
+</button>
+
+@code {
+    [Parameter] public string Label { get; set; } = "Delete";
+    [Parameter] public EventCallback OnConfirm { get; set; }
+
+    private bool _armed;
+
+    private async Task ClickAsync()
+    {
+        if (!_armed)
+        {
+            _armed = true;
+            return;
+        }
+        _armed = false;
+        await OnConfirm.InvokeAsync();
+    }
+}

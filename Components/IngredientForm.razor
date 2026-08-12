@@ -1,0 +1,82 @@
+@* Inline editor form for a recipe ingredient. Nutrition fields show values for the entered
+   amount but store per 100 g/ml behind the callbacks, so changing the amount rescales. *@
+<div class="editor-form">
+    <h3>@Title</h3>
+
+    @if (Error is not null)
+    {
+        <div class="alert-error">@Error</div>
+    }
+
+    <div class="form-grid">
+        <UsdaNameField Label="Ingredient" Placeholder="e.g. Ground turkey" @bind-Value="Ingredient.Name" OnApplied="OnUsdaApplied" />
+        <label class="field">
+            <span>Amount <b class="req">*</b></span>
+            <div class="input-pair">
+                <input class="input" type="number" step="any" min="0" @bind="Ingredient.Amount" />
+                <select class="input" @bind="Ingredient.Unit">
+                    @foreach (var unit in Units.Mass.Concat(Units.Volume))
+                    {
+                        <option value="@unit">@unit</option>
+                    }
+                </select>
+            </div>
+        </label>
+        <label class="field">
+            <span>Calories (kcal)</span>
+            <input class="input" type="number" step="any" min="0"
+                   value="@CaloriesValue()"
+                   @onchange="e => SetCalories(e.Value?.ToString())" />
+        </label>
+    </div>
+
+    <NutrientFields Suffix="for this amount, optional" GetValue="NutrientValue" SetValue="SetNutrient" />
+
+    <div class="btn-row editor-actions">
+        <button class="btn btn-accent" @onclick="() => OnSave.InvokeAsync()">@SaveLabel</button>
+        <button class="btn" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public RecipeIngredient Ingredient { get; set; } = new();
+    [Parameter] public string Title { get; set; } = "Add ingredient";
+    [Parameter] public string SaveLabel { get; set; } = "Save";
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback OnSave { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private void OnUsdaApplied(UsdaApplied a)
+    {
+        Ingredient.Amount = a.Amount;
+        Ingredient.Unit = a.Unit;
+        Ingredient.CaloriesPer100 = a.Food.CaloriesPer100;
+        Ingredient.NutrientsPer100 = new Dictionary<string, double>(a.Food.NutrientsPer100);
+    }
+
+    private string? CaloriesValue() =>
+        Ingredient.Calories?.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private void SetCalories(string? raw)
+    {
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+        {
+            Ingredient.CaloriesPer100 = null;
+            return;
+        }
+        if (Ingredient.AmountInBase is { } b) Ingredient.CaloriesPer100 = v * 100.0 / b;
+    }
+
+    private string? NutrientValue(string key) =>
+        Ingredient.Nutrient(key)?.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private void SetNutrient(string key, string? raw)
+    {
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v))
+        {
+            Ingredient.NutrientsPer100.Remove(key);
+            return;
+        }
+        if (Ingredient.AmountInBase is { } b) Ingredient.NutrientsPer100[key] = v * 100.0 / b;
+    }
+}
