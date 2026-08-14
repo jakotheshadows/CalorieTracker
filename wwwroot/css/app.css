@@ -691,4 +691,24 @@ textarea.input { resize: vertical; }
     .page-main { padding: .75rem; }
     .coffee-chip .coffee-text, .about-chip .about-text { display: none; }
     .coffee-chip, .about-chip { padding: .35rem .5rem; }
+
+    /* Editor forms: one field per row so nothing gets squeezed. */
+    .form-grid { grid-template-columns: 1fr; }
+    .field.span-2 { grid-column: 1 / -1; }
+    .checkbox-field { align-self: auto; padding-bottom: 0; margin-top: .25rem; }
+
+    /* Name + USDA button: put the button on its own row so the input keeps full width. */
+    .name-row { flex-wrap: wrap; }
+    .name-row .input { flex: 1 1 100%; }
+    .name-row .btn { flex: 0 0 auto; }
+
+    /* Two-up macro/nutrient grid stays readable — 140px was too tight for touch. */
+    .nutrients-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+    /* Toolbar search shouldn't fight the category dropdown on tiny screens. */
+    .toolbar .search { max-width: none; }
+
+    /* Card padding gets a bit tight — trim it inside editors. */
+    .card { padding: .85rem; }
+    .editor-row > td { padding: .7rem !important; }
 }
