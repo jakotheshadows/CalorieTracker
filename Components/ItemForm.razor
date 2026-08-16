@@ -1,6 +1,6 @@
 @* Inline editor form for a menu item. The parent supplies a working copy and owns save/cancel. *@
 <div class="editor-form">
-    <h3>@(OriginalName is null ? "New menu item" : $"Edit “{OriginalName}”")</h3>
+    <h3>@(Title ?? (OriginalName is null ? "New menu item" : $"Edit “{OriginalName}”"))</h3>
 
     @if (Error is not null)
     {
@@ -37,8 +37,13 @@
 
     <NutrientFields Suffix="per serving, optional" GetValue="NutrientValue" SetValue="SetNutrient" />
 
+    @if (ExtraFields is not null)
+    {
+        <div class="form-grid extra-fields">@ExtraFields</div>
+    }
+
     <div class="btn-row editor-actions">
-        <button class="btn btn-accent" @onclick="() => OnSave.InvokeAsync()">Save</button>
+        <button class="btn btn-accent" @onclick="() => OnSave.InvokeAsync()">@SaveLabel</button>
         <button class="btn" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
     </div>
 </div>
@@ -46,7 +51,10 @@
 @code {
     [Parameter] public FoodItem Item { get; set; } = new();
     [Parameter] public string? OriginalName { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string SaveLabel { get; set; } = "Save";
     [Parameter] public string? Error { get; set; }
+    [Parameter] public RenderFragment? ExtraFields { get; set; }
     [Parameter] public EventCallback OnSave { get; set; }
     [Parameter] public EventCallback OnCancel { get; set; }
 

@@ -5,6 +5,12 @@ public class ScheduleEntry
 {
     public string ItemName { get; set; } = "";
     public double Servings { get; set; } = 1;
+
+    /// <summary>
+    /// One-off item embedded in the entry instead of referencing the menu.
+    /// Null for regular entries; when set, <see cref="ItemName"/> mirrors its name.
+    /// </summary>
+    public FoodItem? AdHoc { get; set; }
 }
 
 /// <summary>The whole persisted app state: menu items plus the schedule (days keyed "yyyy-MM-dd").</summary>

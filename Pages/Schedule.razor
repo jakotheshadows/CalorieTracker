@@ -129,32 +129,59 @@
                         <tbody>
                             @foreach (var entry in entries.ToList())
                             {
-                                var item = State.ResolveItem(entry.ItemName);
-                                <tr @key="entry">
-                                    <td>
-                                        <span class="item-name">@entry.ItemName</span>
-                                        @if (item?.ServingSize is not null)
-                                        {
-                                            <span class="muted small"> · @item.ServingSize</span>
-                                        }
-                                        @if (item is null)
-                                        {
-                                            <span class="badge badge-warn">missing item</span>
-                                        }
-                                    </td>
-                                    <td class="num servings-cell">
-                                        <input class="input input-sm num" type="number" step="0.5" min="0"
-                                               value="@entry.Servings"
-                                               @onchange="e => OnServingsChanged(entry, e.Value?.ToString())" />
-                                    </td>
-                                    <td class="num">@(item?.Calories is null ? "—" : (item.Calories.Value * entry.Servings).ToString("N0"))</td>
-                                    <td class="num">@EntryMacro(item, "protein", entry.Servings)</td>
-                                    <td class="num">@EntryMacro(item, "carbs", entry.Servings)</td>
-                                    <td class="num">@EntryMacro(item, "fat", entry.Servings)</td>
-                                    <td class="actions">
-                                        <button class="btn btn-sm btn-ghost-danger" @onclick="() => State.RemoveEntryAsync(_date, entry)">✕</button>
-                                    </td>
-                                </tr>
+                                @if (_adhocEntry == entry && _adhocItem is not null)
+                                {
+                                    <tr class="editor-row" @key="entry">
+                                        <td colspan="7">
+                                            <ItemForm Item="_adhocItem" Title="@($"Edit “{entry.ItemName}”")" SaveLabel="Save" Error="@_adhocError"
+                                                      OnSave="SaveAdHocAsync" OnCancel="CancelAdHoc">
+                                                <ExtraFields>
+                                                    <label class="field checkbox-field">
+                                                        <input type="checkbox" @bind="_adhocSaveToMenu" />
+                                                        <span>Also save to my menu items</span>
+                                                    </label>
+                                                </ExtraFields>
+                                            </ItemForm>
+                                        </td>
+                                    </tr>
+                                }
+                                else
+                                {
+                                    var item = State.ResolveEntry(entry);
+                                    <tr @key="entry">
+                                        <td>
+                                            <span class="item-name">@entry.ItemName</span>
+                                            @if (entry.AdHoc is not null)
+                                            {
+                                                <span class="badge badge-adhoc" title="One-off entry — not in your menu items">one-off</span>
+                                            }
+                                            @if (item?.ServingSize is not null)
+                                            {
+                                                <span class="muted small"> · @item.ServingSize</span>
+                                            }
+                                            @if (item is null)
+                                            {
+                                                <span class="badge badge-warn">missing item</span>
+                                            }
+                                        </td>
+                                        <td class="num servings-cell">
+                                            <input class="input input-sm num" type="number" step="0.5" min="0"
+                                                   value="@entry.Servings"
+                                                   @onchange="e => OnServingsChanged(entry, e.Value?.ToString())" />
+                                        </td>
+                                        <td class="num">@(item?.Calories is null ? "—" : (item.Calories.Value * entry.Servings).ToString("N0"))</td>
+                                        <td class="num">@EntryMacro(item, "protein", entry.Servings)</td>
+                                        <td class="num">@EntryMacro(item, "carbs", entry.Servings)</td>
+                                        <td class="num">@EntryMacro(item, "fat", entry.Servings)</td>
+                                        <td class="actions">
+                                            @if (entry.AdHoc is not null)
+                                            {
+                                                <button class="btn btn-sm" @onclick="() => StartEditAdHoc(entry)">Edit</button>
+                                            }
+                                            <button class="btn btn-sm btn-ghost-danger" @onclick="() => State.RemoveEntryAsync(_date, entry)">✕</button>
+                                        </td>
+                                    </tr>
+                                }
                             }
                         </tbody>
                     </table>
@@ -188,12 +215,32 @@
                     </select>
                     <input class="input input-sm num" type="number" step="0.5" min="0.5" @bind="_addServings" />
                     <button class="btn btn-accent" disabled="@(string.IsNullOrEmpty(_addItemName))" @onclick="AddEntryAsync">Add</button>
+                    <button class="btn" title="Add something that isn't in your menu items" @onclick="StartAddAdHoc">+ One-off</button>
                     @if (entries.Count > 0)
                     {
                         <span class="spacer"></span>
                         <button class="btn btn-ghost-danger" @onclick="() => State.ClearDayAsync(_date)">Clear day</button>
                     }
                 </div>
+
+                @if (_adhocItem is not null && _adhocEntry is null)
+                {
+                    <div class="inline-editor">
+                        <ItemForm Item="_adhocItem" Title="@($"One-off item for {_date:dddd, MMM d}")" SaveLabel="Add to day" Error="@_adhocError"
+                                  OnSave="SaveAdHocAsync" OnCancel="CancelAdHoc">
+                            <ExtraFields>
+                                <label class="field">
+                                    <span>Servings</span>
+                                    <input class="input" type="number" step="0.5" min="0.5" @bind="_adhocServings" />
+                                </label>
+                                <label class="field checkbox-field">
+                                    <input type="checkbox" @bind="_adhocSaveToMenu" />
+                                    <span>Also save to my menu items</span>
+                                </label>
+                            </ExtraFields>
+                        </ItemForm>
+                    </div>
+                }
 
                 <div class="template-row">
                     @if (State.TemplateNames.Any())
@@ -372,6 +419,12 @@
     private string _addItemName = "";
     private double _addServings = 1;
 
+    private FoodItem? _adhocItem;
+    private ScheduleEntry? _adhocEntry;
+    private double _adhocServings = 1;
+    private bool _adhocSaveToMenu;
+    private string? _adhocError;
+
     private string _templateSel = "";
     private string? _templateToDelete;
     private bool _savingTemplate;
@@ -461,6 +514,42 @@
     {
         var v = item?.Nutrient(key);
         return v is null ? "—" : (v.Value * servings).ToString("0.#");
+    }
+
+    // ---------- One-off entries ----------
+
+    private void StartAddAdHoc()
+    {
+        _adhocItem = new FoodItem();
+        _adhocEntry = null;
+        _adhocServings = 1;
+        _adhocSaveToMenu = false;
+        _adhocError = null;
+    }
+
+    private void StartEditAdHoc(ScheduleEntry entry)
+    {
+        if (entry.AdHoc is null) return;
+        _adhocItem = entry.AdHoc.Clone();
+        _adhocEntry = entry;
+        _adhocSaveToMenu = false;
+        _adhocError = null;
+    }
+
+    private void CancelAdHoc()
+    {
+        _adhocItem = null;
+        _adhocEntry = null;
+        _adhocError = null;
+    }
+
+    private async Task SaveAdHocAsync()
+    {
+        if (_adhocItem is null) return;
+        _adhocError = _adhocEntry is null
+            ? await State.AddAdHocEntryAsync(_date, _adhocItem, _adhocServings, _adhocSaveToMenu)
+            : await State.UpdateAdHocEntryAsync(_date, _adhocEntry, _adhocItem, _adhocSaveToMenu);
+        if (_adhocError is null) CancelAdHoc();
     }
 
     private void StartSaveTemplate()

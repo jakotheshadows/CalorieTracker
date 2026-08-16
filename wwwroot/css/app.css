@@ -329,6 +329,7 @@ textarea.input { resize: vertical; }
 .badge-snack { color: var(--carbs); border-color: rgba(230, 192, 90, .4); }
 .badge-warn { color: var(--warn); border-color: rgba(224, 179, 76, .4); margin-left: .4rem; }
 .badge-norand { margin-left: .4rem; }
+.badge-adhoc { color: var(--protein); border-color: rgba(90, 169, 230, .4); margin-left: .4rem; }
 
 /* ---------- Forms ---------- */
 

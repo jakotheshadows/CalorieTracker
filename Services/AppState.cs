@@ -87,6 +87,10 @@ public class AppState(LocalStore store)
     public IEnumerable<FoodItem> AllMenuItems() =>
         Data.Items.Concat(Data.Recipes.Select(r => r.ToMenuItem()));
 
+    /// <summary>The item a schedule entry stands for: its embedded one-off item, or the named menu item/recipe.</summary>
+    public FoodItem? ResolveEntry(ScheduleEntry entry) =>
+        entry.AdHoc ?? ResolveItem(entry.ItemName);
+
     /// <summary>Add or update an item. <paramref name="originalName"/> is non-null when editing an existing item.</summary>
     public async Task<string?> UpsertItemAsync(FoodItem item, string? originalName)
     {
@@ -117,9 +121,10 @@ public class AppState(LocalStore store)
                 Data.Items[idx] = item;
                 if (!string.Equals(originalName, name, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Keep schedule and template entries pointing at the renamed item.
+                    // Keep schedule and template entries pointing at the renamed item
+                    // (one-off entries that happen to share the name are their own thing).
                     foreach (var list in Data.Days.Values.Concat(Data.Templates.Values))
-                        foreach (var e in list.Where(e => string.Equals(e.ItemName, originalName, StringComparison.OrdinalIgnoreCase)))
+                        foreach (var e in list.Where(e => e.AdHoc is null && string.Equals(e.ItemName, originalName, StringComparison.OrdinalIgnoreCase)))
                             e.ItemName = name;
                 }
             }
@@ -133,17 +138,23 @@ public class AppState(LocalStore store)
     public async Task DeleteItemAsync(string name)
     {
         Data.Items.RemoveAll(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase));
+        RemoveEntriesReferencing(name);
+        await PersistAsync();
+    }
+
+    /// <summary>Drop schedule/template entries that reference a deleted item or recipe by name. One-off entries stay.</summary>
+    private void RemoveEntriesReferencing(string name)
+    {
         foreach (var key in Data.Days.Keys.ToList())
         {
-            Data.Days[key].RemoveAll(e => string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
+            Data.Days[key].RemoveAll(e => e.AdHoc is null && string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
             if (Data.Days[key].Count == 0) Data.Days.Remove(key);
         }
         foreach (var key in Data.Templates.Keys.ToList())
         {
-            Data.Templates[key].RemoveAll(e => string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
+            Data.Templates[key].RemoveAll(e => e.AdHoc is null && string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
             if (Data.Templates[key].Count == 0) Data.Templates.Remove(key);
         }
-        await PersistAsync();
     }
 
     // ---------- Recipes ----------
@@ -219,16 +230,7 @@ public class AppState(LocalStore store)
     public async Task DeleteRecipeAsync(string name)
     {
         Data.Recipes.RemoveAll(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
-        foreach (var key in Data.Days.Keys.ToList())
-        {
-            Data.Days[key].RemoveAll(e => string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
-            if (Data.Days[key].Count == 0) Data.Days.Remove(key);
-        }
-        foreach (var key in Data.Templates.Keys.ToList())
-        {
-            Data.Templates[key].RemoveAll(e => string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
-            if (Data.Templates[key].Count == 0) Data.Templates.Remove(key);
-        }
+        RemoveEntriesReferencing(name);
         await PersistAsync();
     }
 
@@ -240,15 +242,80 @@ public class AppState(LocalStore store)
     public async Task AddEntryAsync(DateOnly date, string itemName, double servings)
     {
         if (servings <= 0) return;
-        var key = AppData.DayKey(date);
-        if (!Data.Days.TryGetValue(key, out var list))
-            Data.Days[key] = list = new List<ScheduleEntry>();
+        var list = DayList(date);
 
-        var existing = list.FirstOrDefault(e => string.Equals(e.ItemName, itemName, StringComparison.OrdinalIgnoreCase));
+        var existing = list.FirstOrDefault(e => e.AdHoc is null && string.Equals(e.ItemName, itemName, StringComparison.OrdinalIgnoreCase));
         if (existing is not null) existing.Servings += servings;
         else list.Add(new ScheduleEntry { ItemName = itemName, Servings = servings });
 
         await PersistAsync();
+    }
+
+    private List<ScheduleEntry> DayList(DateOnly date)
+    {
+        var key = AppData.DayKey(date);
+        if (!Data.Days.TryGetValue(key, out var list))
+            Data.Days[key] = list = new List<ScheduleEntry>();
+        return list;
+    }
+
+    /// <summary>
+    /// Add a one-off item to a day. When <paramref name="saveToMenu"/> is set the item is
+    /// added to the menu instead and the entry references it normally. Null on success.
+    /// </summary>
+    public async Task<string?> AddAdHocEntryAsync(DateOnly date, FoodItem item, double servings, bool saveToMenu)
+    {
+        var name = item.Name?.Trim() ?? "";
+        if (name.Length == 0) return "Name is required.";
+        if (servings <= 0) return "Servings must be greater than zero.";
+        item.Name = name;
+
+        if (saveToMenu)
+        {
+            var error = await UpsertItemAsync(item, null);
+            if (error is not null) return error;
+            await AddEntryAsync(date, name, servings);
+            return null;
+        }
+
+        DayList(date).Add(new ScheduleEntry { ItemName = name, Servings = servings, AdHoc = item });
+        await PersistAsync();
+        return null;
+    }
+
+    /// <summary>
+    /// Replace a one-off entry's embedded item. When <paramref name="saveToMenu"/> is set the
+    /// item joins the menu and the entry converts to a regular reference. Null on success.
+    /// </summary>
+    public async Task<string?> UpdateAdHocEntryAsync(DateOnly date, ScheduleEntry entry, FoodItem item, bool saveToMenu)
+    {
+        var name = item.Name?.Trim() ?? "";
+        if (name.Length == 0) return "Name is required.";
+        item.Name = name;
+
+        if (saveToMenu)
+        {
+            var error = await UpsertItemAsync(item, null);
+            if (error is not null) return error;
+            entry.AdHoc = null;
+            entry.ItemName = name;
+            // Fold into an existing regular entry for the same item, if the day has one.
+            var list = DayList(date);
+            var twin = list.FirstOrDefault(e => e != entry && e.AdHoc is null && string.Equals(e.ItemName, name, StringComparison.OrdinalIgnoreCase));
+            if (twin is not null)
+            {
+                twin.Servings += entry.Servings;
+                list.Remove(entry);
+            }
+        }
+        else
+        {
+            entry.AdHoc = item;
+            entry.ItemName = name;
+        }
+
+        await PersistAsync();
+        return null;
     }
 
     public async Task UpdateServingsAsync(DateOnly date, ScheduleEntry entry, double servings)
@@ -298,7 +365,7 @@ public class AppState(LocalStore store)
         }
 
         Data.Templates[name] = entries
-            .Select(e => new ScheduleEntry { ItemName = e.ItemName, Servings = e.Servings })
+            .Select(e => new ScheduleEntry { ItemName = e.ItemName, Servings = e.Servings, AdHoc = e.AdHoc?.Clone() })
             .ToList();
         await PersistAsync();
         return null;
@@ -316,15 +383,17 @@ public class AppState(LocalStore store)
         if (!Data.Templates.TryGetValue(name, out var template))
             return "Template not found.";
 
-        var key = AppData.DayKey(date);
-        if (!Data.Days.TryGetValue(key, out var list))
-            Data.Days[key] = list = new List<ScheduleEntry>();
+        var list = DayList(date);
 
         foreach (var t in template)
         {
-            var existing = list.FirstOrDefault(e => string.Equals(e.ItemName, t.ItemName, StringComparison.OrdinalIgnoreCase));
+            // Regular entries merge by name; one-off entries always land as their own copies
+            // (same-named one-offs can carry different nutrition).
+            var existing = t.AdHoc is null
+                ? list.FirstOrDefault(e => e.AdHoc is null && string.Equals(e.ItemName, t.ItemName, StringComparison.OrdinalIgnoreCase))
+                : null;
             if (existing is not null) existing.Servings += t.Servings;
-            else list.Add(new ScheduleEntry { ItemName = t.ItemName, Servings = t.Servings });
+            else list.Add(new ScheduleEntry { ItemName = t.ItemName, Servings = t.Servings, AdHoc = t.AdHoc?.Clone() });
         }
 
         await PersistAsync();
@@ -397,7 +466,7 @@ public class AppState(LocalStore store)
     {
         foreach (var entry in GetDay(date))
         {
-            var item = ResolveItem(entry.ItemName);
+            var item = ResolveEntry(entry);
             if (item is not null) totals.Add(item, entry.Servings);
         }
     }
