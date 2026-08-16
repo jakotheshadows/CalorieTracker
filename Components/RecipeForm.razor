@@ -36,11 +36,3 @@
         <button class="btn" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
     </div>
 </div>
-
-@code {
-    [Parameter] public Recipe Recipe { get; set; } = new();
-    [Parameter] public string? OriginalName { get; set; }
-    [Parameter] public string? Error { get; set; }
-    [Parameter] public EventCallback OnSave { get; set; }
-    [Parameter] public EventCallback OnCancel { get; set; }
-}
