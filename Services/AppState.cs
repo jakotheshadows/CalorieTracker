@@ -190,9 +190,10 @@ public class AppState(LocalStore store)
                 Data.Recipes[idx] = recipe;
                 if (!string.Equals(originalName, name, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Keep schedule and template entries pointing at the renamed recipe.
+                    // Keep schedule and template entries pointing at the renamed recipe
+                    // (one-off entries that happen to share the name are their own thing).
                     foreach (var list in Data.Days.Values.Concat(Data.Templates.Values))
-                        foreach (var e in list.Where(e => string.Equals(e.ItemName, originalName, StringComparison.OrdinalIgnoreCase)))
+                        foreach (var e in list.Where(e => e.AdHoc is null && string.Equals(e.ItemName, originalName, StringComparison.OrdinalIgnoreCase)))
                             e.ItemName = name;
                 }
             }
