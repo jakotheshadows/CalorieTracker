@@ -82,36 +82,43 @@ window.calTracker = {
     getVersion: () =>
         document.querySelector('meta[name="app-version"]')?.content || "dev",
 
-    // Camera barcode scanning via the native BarcodeDetector API (Chrome on Android;
-    // callers fall back to manual number entry where it's unavailable).
+    // Camera barcode scanning: the native BarcodeDetector API where the browser has a
+    // decoder (Chrome on Android), otherwise the vendored ZXing library (desktop
+    // Chrome/Edge/Firefox, iOS Safari), lazy-loaded on first scan.
     // A session counter guards every await and the detect loop: stop() (or a newer
     // start()) bumps it, so a cancelled start releases the camera it just acquired and
     // a superseded loop exits instead of touching the new session's state.
     scanner: {
         stream: null,
         session: 0,
+        zxingReader: null,
+        zxingLoading: null,
 
         // Starts the camera + detection loop. Returns null on success or a
         // user-facing error message; on a hit calls dotnetRef.OnBarcodeDetected(value).
         start: async function (videoId, dotnetRef) {
             const session = ++this.session;
-            this.releaseStream();
+            this.teardown();
             const video = document.getElementById(videoId);
             if (!video) return "Scanner video element not found.";
-            if (!("BarcodeDetector" in window))
-                return "This browser can't scan barcodes with the camera — type the number instead.";
 
-            let formats;
-            try {
-                const supported = await BarcodeDetector.getSupportedFormats();
-                formats = ["ean_13", "upc_a", "ean_8", "upc_e"].filter(f => supported.includes(f));
-            } catch {
-                formats = [];
+            // Pick the decoder before touching the camera.
+            let detector = null;
+            if ("BarcodeDetector" in window) {
+                try {
+                    const supported = await BarcodeDetector.getSupportedFormats();
+                    const formats = ["ean_13", "upc_a", "ean_8", "upc_e"].filter(f => supported.includes(f));
+                    if (formats.length > 0) detector = new BarcodeDetector({ formats });
+                } catch { /* fall through to ZXing */ }
             }
-            if (formats.length === 0)
-                return "This browser can't scan product barcodes — type the number instead.";
             if (session !== this.session) return null;
 
+            return detector
+                ? await this.runNative(session, video, detector, dotnetRef)
+                : await this.runZxing(session, video, dotnetRef);
+        },
+
+        runNative: async function (session, video, detector, dotnetRef) {
             let stream;
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
@@ -119,9 +126,7 @@ window.calTracker = {
                     audio: false,
                 });
             } catch (err) {
-                return err && err.name === "NotAllowedError"
-                    ? "Camera permission was denied — allow it in your browser, or type the number instead."
-                    : "Couldn't open the camera — type the number instead.";
+                return this.cameraError(err);
             }
             if (session !== this.session) {
                 // Cancelled while the permission prompt / warm-up was pending.
@@ -134,7 +139,6 @@ window.calTracker = {
             try { await video.play(); } catch { /* interrupted by teardown */ }
             if (session !== this.session) return null;
 
-            const detector = new BarcodeDetector({ formats });
             const scan = async () => {
                 if (session !== this.session) return;
                 try {
@@ -152,12 +156,75 @@ window.calTracker = {
             return null;
         },
 
-        stop: function () {
-            this.session++;
-            this.releaseStream();
+        runZxing: async function (session, video, dotnetRef) {
+            try {
+                await this.loadZxing();
+            } catch {
+                return "Couldn't load the barcode scanner — type the number instead.";
+            }
+            if (session !== this.session) return null;
+
+            const hints = new Map();
+            hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+                ZXing.BarcodeFormat.EAN_13,
+                ZXing.BarcodeFormat.UPC_A,
+                ZXing.BarcodeFormat.EAN_8,
+                ZXing.BarcodeFormat.UPC_E,
+            ]);
+            const reader = new ZXing.BrowserMultiFormatReader(hints);
+            this.zxingReader = reader;
+            try {
+                // ZXing owns the stream here; teardown() releases it via reader.reset().
+                await reader.decodeFromConstraints(
+                    { video: { facingMode: { ideal: "environment" } }, audio: false },
+                    video,
+                    (result) => {
+                        if (session !== this.session || !result) return;
+                        const value = result.getText();
+                        this.stop();
+                        dotnetRef.invokeMethodAsync("OnBarcodeDetected", value);
+                    });
+            } catch (err) {
+                if (session !== this.session) return null;
+                this.zxingReader = null;
+                return this.cameraError(err);
+            }
+            if (session !== this.session) {
+                try { reader.reset(); } catch { /* already torn down */ }
+            }
+            return null;
         },
 
-        releaseStream: function () {
+        loadZxing: function () {
+            if (window.ZXing) return Promise.resolve();
+            if (!this.zxingLoading) {
+                this.zxingLoading = new Promise((resolve, reject) => {
+                    const s = document.createElement("script");
+                    s.src = "js/zxing.min.js";
+                    s.onload = resolve;
+                    s.onerror = () => { this.zxingLoading = null; reject(new Error("script load failed")); };
+                    document.head.appendChild(s);
+                });
+            }
+            return this.zxingLoading;
+        },
+
+        cameraError: function (err) {
+            return err && err.name === "NotAllowedError"
+                ? "Camera permission was denied — allow it in your browser, or type the number instead."
+                : "Couldn't open the camera — type the number instead.";
+        },
+
+        stop: function () {
+            this.session++;
+            this.teardown();
+        },
+
+        teardown: function () {
+            if (this.zxingReader) {
+                try { this.zxingReader.reset(); } catch { /* already stopped */ }
+                this.zxingReader = null;
+            }
             if (this.stream) {
                 this.stream.getTracks().forEach(t => t.stop());
                 this.stream = null;
