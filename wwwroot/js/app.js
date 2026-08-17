@@ -118,13 +118,24 @@ window.calTracker = {
                 : await this.runZxing(session, video, dotnetRef);
         },
 
+        // High resolution + continuous focus give 1D decoding enough sharp pixels;
+        // fixed-focus webcams at 640x480 rarely resolve the bars.
+        cameraConstraints: function () {
+            return {
+                video: {
+                    facingMode: { ideal: "environment" },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
+                    advanced: [{ focusMode: "continuous" }],
+                },
+                audio: false,
+            };
+        },
+
         runNative: async function (session, video, detector, dotnetRef) {
             let stream;
             try {
-                stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: { ideal: "environment" } },
-                    audio: false,
-                });
+                stream = await navigator.mediaDevices.getUserMedia(this.cameraConstraints());
             } catch (err) {
                 return this.cameraError(err);
             }
@@ -171,12 +182,14 @@ window.calTracker = {
                 ZXing.BarcodeFormat.EAN_8,
                 ZXing.BarcodeFormat.UPC_E,
             ]);
-            const reader = new ZXing.BrowserMultiFormatReader(hints);
+            // TRY_HARDER copes with the soft focus and low contrast of typical webcams.
+            hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+            const reader = new ZXing.BrowserMultiFormatReader(hints, 200);
             this.zxingReader = reader;
             try {
                 // ZXing owns the stream here; teardown() releases it via reader.reset().
                 await reader.decodeFromConstraints(
-                    { video: { facingMode: { ideal: "environment" } }, audio: false },
+                    this.cameraConstraints(),
                     video,
                     (result) => {
                         if (session !== this.session || !result) return;
