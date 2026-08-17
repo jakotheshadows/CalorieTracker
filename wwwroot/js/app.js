@@ -196,7 +196,6 @@ window.calTracker = {
             const reader = new ZXing.MultiFormatReader();
             reader.setHints(hints);
 
-            const frame = document.createElement("canvas");
             const region = document.createElement("canvas");
             const decodeCanvas = (canvas) => {
                 try {
@@ -206,34 +205,47 @@ window.calTracker = {
                 } catch { return null; /* nothing found in this attempt */ }
             };
 
+            // Draws the band around the aiming line, optionally rotation-corrected and
+            // upscaled, and tries to decode it. Decoding tolerates only a couple degrees
+            // of tilt, so small angle corrections plus frame-to-frame hand jitter do the
+            // rest; 2x magnification covers barcodes that are small in the frame.
+            const decodeBand = (w, h, angleDeg, scale) => {
+                const sx = Math.round(w * 0.10), sw = Math.round(w * 0.80);
+                const sy = Math.round(h * 0.28), sh = Math.round(h * 0.44);
+                region.width = sw * scale;
+                region.height = sh * scale;
+                const ctx = region.getContext("2d");
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.translate(region.width / 2, region.height / 2);
+                ctx.rotate(angleDeg * Math.PI / 180);
+                ctx.drawImage(video, sx, sy, sw, sh, -region.width / 2, -region.height / 2, region.width, region.height);
+                return decodeCanvas(region);
+            };
+
+            // Blurry frames can decode into a wrong-but-checksum-valid code, so a value
+            // is only accepted once two attempts in a row agree on it.
+            let candidate = null;
             const scan = async () => {
                 if (session !== this.session) return;
                 const w = video.videoWidth, h = video.videoHeight;
                 if (w > 0 && h > 0) {
-                    // Pass 1: the full frame at capture resolution.
-                    frame.width = w;
-                    frame.height = h;
-                    frame.getContext("2d").drawImage(video, 0, 0);
-                    let text = decodeCanvas(frame);
-
-                    // Pass 2: the band around the aiming line, upscaled 2x — a barcode at
-                    // arm's length is only a sliver of the frame and needs the magnification.
-                    if (text === null) {
-                        const sx = Math.round(w * 0.10), sw = Math.round(w * 0.80);
-                        const sy = Math.round(h * 0.28), sh = Math.round(h * 0.44);
-                        region.width = sw * 2;
-                        region.height = sh * 2;
-                        region.getContext("2d").drawImage(video, sx, sy, sw, sh, 0, 0, sw * 2, sh * 2);
-                        text = decodeCanvas(region);
+                    let text = null;
+                    for (const [angle, scale] of [[0, 1], [-4, 1], [4, 1], [0, 2]]) {
+                        text = decodeBand(w, h, angle, scale);
+                        if (text !== null) break;
+                        if (session !== this.session) return;
                     }
 
                     if (text !== null && session === this.session) {
-                        this.stop();
-                        await dotnetRef.invokeMethodAsync("OnBarcodeDetected", text);
-                        return;
+                        if (text === candidate) {
+                            this.stop();
+                            await dotnetRef.invokeMethodAsync("OnBarcodeDetected", text);
+                            return;
+                        }
+                        candidate = text;
                     }
                 }
-                if (session === this.session) setTimeout(scan, 200);
+                if (session === this.session) setTimeout(scan, 100);
             };
             scan();
             return null;
