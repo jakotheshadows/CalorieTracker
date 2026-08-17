@@ -91,7 +91,6 @@ window.calTracker = {
     scanner: {
         stream: null,
         session: 0,
-        zxingReader: null,
         zxingLoading: null,
 
         // Starts the camera + detection loop. Returns null on success or a
@@ -132,7 +131,9 @@ window.calTracker = {
             };
         },
 
-        runNative: async function (session, video, detector, dotnetRef) {
+        // Acquires the camera onto the video element. Returns null on success (or when
+        // superseded — caller re-checks the session) and an error message otherwise.
+        openCamera: async function (session, video) {
             let stream;
             try {
                 stream = await navigator.mediaDevices.getUserMedia(this.cameraConstraints());
@@ -148,7 +149,12 @@ window.calTracker = {
             this.stream = stream;
             video.srcObject = stream;
             try { await video.play(); } catch { /* interrupted by teardown */ }
-            if (session !== this.session) return null;
+            return null;
+        },
+
+        runNative: async function (session, video, detector, dotnetRef) {
+            const err = await this.openCamera(session, video);
+            if (err !== null || session !== this.session) return err;
 
             const scan = async () => {
                 if (session !== this.session) return;
@@ -175,6 +181,9 @@ window.calTracker = {
             }
             if (session !== this.session) return null;
 
+            const err = await this.openCamera(session, video);
+            if (err !== null || session !== this.session) return err;
+
             const hints = new Map();
             hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
                 ZXing.BarcodeFormat.EAN_13,
@@ -184,27 +193,49 @@ window.calTracker = {
             ]);
             // TRY_HARDER copes with the soft focus and low contrast of typical webcams.
             hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-            const reader = new ZXing.BrowserMultiFormatReader(hints, 200);
-            this.zxingReader = reader;
-            try {
-                // ZXing owns the stream here; teardown() releases it via reader.reset().
-                await reader.decodeFromConstraints(
-                    this.cameraConstraints(),
-                    video,
-                    (result) => {
-                        if (session !== this.session || !result) return;
-                        const value = result.getText();
+            const reader = new ZXing.MultiFormatReader();
+            reader.setHints(hints);
+
+            const frame = document.createElement("canvas");
+            const region = document.createElement("canvas");
+            const decodeCanvas = (canvas) => {
+                try {
+                    const source = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+                    const bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source));
+                    return reader.decodeWithState(bitmap).getText();
+                } catch { return null; /* nothing found in this attempt */ }
+            };
+
+            const scan = async () => {
+                if (session !== this.session) return;
+                const w = video.videoWidth, h = video.videoHeight;
+                if (w > 0 && h > 0) {
+                    // Pass 1: the full frame at capture resolution.
+                    frame.width = w;
+                    frame.height = h;
+                    frame.getContext("2d").drawImage(video, 0, 0);
+                    let text = decodeCanvas(frame);
+
+                    // Pass 2: the band around the aiming line, upscaled 2x — a barcode at
+                    // arm's length is only a sliver of the frame and needs the magnification.
+                    if (text === null) {
+                        const sx = Math.round(w * 0.10), sw = Math.round(w * 0.80);
+                        const sy = Math.round(h * 0.28), sh = Math.round(h * 0.44);
+                        region.width = sw * 2;
+                        region.height = sh * 2;
+                        region.getContext("2d").drawImage(video, sx, sy, sw, sh, 0, 0, sw * 2, sh * 2);
+                        text = decodeCanvas(region);
+                    }
+
+                    if (text !== null && session === this.session) {
                         this.stop();
-                        dotnetRef.invokeMethodAsync("OnBarcodeDetected", value);
-                    });
-            } catch (err) {
-                if (session !== this.session) return null;
-                this.zxingReader = null;
-                return this.cameraError(err);
-            }
-            if (session !== this.session) {
-                try { reader.reset(); } catch { /* already torn down */ }
-            }
+                        await dotnetRef.invokeMethodAsync("OnBarcodeDetected", text);
+                        return;
+                    }
+                }
+                if (session === this.session) setTimeout(scan, 200);
+            };
+            scan();
             return null;
         },
 
@@ -234,10 +265,6 @@ window.calTracker = {
         },
 
         teardown: function () {
-            if (this.zxingReader) {
-                try { this.zxingReader.reset(); } catch { /* already stopped */ }
-                this.zxingReader = null;
-            }
             if (this.stream) {
                 this.stream.getTracks().forEach(t => t.stop());
                 this.stream = null;
