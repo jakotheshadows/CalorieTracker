@@ -7,11 +7,15 @@ public partial class UsdaPanel
 {
     /// <summary>The search text at open time (the parent's name field).</summary>
     [Parameter] public string? Query { get; set; }
+
+    /// <summary>When set, the panel opens by looking up this barcode instead of searching the name.</summary>
+    [Parameter] public string? InitialBarcode { get; set; }
     [Parameter] public EventCallback<UsdaApplied> OnApplied { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
     private bool _hasKey;
     private bool _busy;
+    private int _searchSeq;
     private string? _lastQuery;
     private string? _error;
     private string? _applied;
@@ -23,8 +27,9 @@ public partial class UsdaPanel
     protected override async Task OnInitializedAsync()
     {
         _hasKey = await Usda.GetApiKeyAsync() is not null;
-        if (_hasKey && !string.IsNullOrWhiteSpace(Query))
-            await SearchAsync(Query);
+        if (!_hasKey) return;
+        if (InitialBarcode is not null) await LookupBarcodeAsync(InitialBarcode);
+        else if (!string.IsNullOrWhiteSpace(Query)) await SearchAsync(Query);
     }
 
     /// <summary>Run a search. Called on open and by the parent (via @ref) on later button clicks.</summary>
@@ -43,6 +48,7 @@ public partial class UsdaPanel
             return;
         }
 
+        var seq = ++_searchSeq;
         _busy = true;
         _lastQuery = query;
         _error = null;
@@ -50,8 +56,38 @@ public partial class UsdaPanel
         _results = null;
         _selected = null;
         await InvokeAsync(StateHasChanged);
-        (_results, _error) = await Usda.SearchAsync(query);
+        var (results, error) = await Usda.SearchAsync(query);
+        if (seq != _searchSeq) return; // a newer search/lookup superseded this one
+        (_results, _error) = (results, error);
         _busy = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Look up a scanned/typed barcode and auto-apply the matching food at its label serving.</summary>
+    public async Task LookupBarcodeAsync(string code)
+    {
+        if (!_hasKey) return;
+        var seq = ++_searchSeq;
+        _busy = true;
+        _lastQuery = $"barcode {code}";
+        _error = null;
+        _applied = null;
+        _results = null;
+        _selected = null;
+        await InvokeAsync(StateHasChanged);
+
+        var (food, error) = await Usda.LookupBarcodeAsync(code);
+        if (seq != _searchSeq) return; // a newer search/lookup superseded this one
+        _busy = false;
+        if (food is null)
+        {
+            _error = error;
+        }
+        else
+        {
+            _results = new List<UsdaFood> { food };
+            await ApplyAsync(food);
+        }
         await InvokeAsync(StateHasChanged);
     }
 

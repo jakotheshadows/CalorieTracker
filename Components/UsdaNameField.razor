@@ -7,11 +7,18 @@
     <div class="name-row">
         <input class="input" value="@Value" @onchange="OnNameChangedAsync" placeholder="@Placeholder" />
         <button class="btn" type="button" title="Search the USDA food database for this name and auto-fill nutrition" @onclick="SearchClickAsync">🔎 Search USDA</button>
+        <button class="btn" type="button" title="Scan a product barcode and auto-fill nutrition from USDA" @onclick="ToggleScan">📷 Scan</button>
     </div>
 </label>
+@if (_scanning)
+{
+    <div class="field span-full">
+        <BarcodeScanner OnDetected="OnBarcodeAsync" OnClose="() => _scanning = false" />
+    </div>
+}
 @if (_open)
 {
     <div class="field span-full">
-        <UsdaPanel @ref="_panel" Query="@Value" OnApplied="HandleAppliedAsync" OnClose="() => _open = false" />
+        <UsdaPanel @ref="_panel" Query="@Value" InitialBarcode="@_initialBarcode" OnApplied="HandleAppliedAsync" OnClose="() => _open = false" />
     </div>
 }

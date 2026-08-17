@@ -82,6 +82,89 @@ window.calTracker = {
     getVersion: () =>
         document.querySelector('meta[name="app-version"]')?.content || "dev",
 
+    // Camera barcode scanning via the native BarcodeDetector API (Chrome on Android;
+    // callers fall back to manual number entry where it's unavailable).
+    // A session counter guards every await and the detect loop: stop() (or a newer
+    // start()) bumps it, so a cancelled start releases the camera it just acquired and
+    // a superseded loop exits instead of touching the new session's state.
+    scanner: {
+        stream: null,
+        session: 0,
+
+        // Starts the camera + detection loop. Returns null on success or a
+        // user-facing error message; on a hit calls dotnetRef.OnBarcodeDetected(value).
+        start: async function (videoId, dotnetRef) {
+            const session = ++this.session;
+            this.releaseStream();
+            const video = document.getElementById(videoId);
+            if (!video) return "Scanner video element not found.";
+            if (!("BarcodeDetector" in window))
+                return "This browser can't scan barcodes with the camera — type the number instead.";
+
+            let formats;
+            try {
+                const supported = await BarcodeDetector.getSupportedFormats();
+                formats = ["ean_13", "upc_a", "ean_8", "upc_e"].filter(f => supported.includes(f));
+            } catch {
+                formats = [];
+            }
+            if (formats.length === 0)
+                return "This browser can't scan product barcodes — type the number instead.";
+            if (session !== this.session) return null;
+
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: "environment" } },
+                    audio: false,
+                });
+            } catch (err) {
+                return err && err.name === "NotAllowedError"
+                    ? "Camera permission was denied — allow it in your browser, or type the number instead."
+                    : "Couldn't open the camera — type the number instead.";
+            }
+            if (session !== this.session) {
+                // Cancelled while the permission prompt / warm-up was pending.
+                stream.getTracks().forEach(t => t.stop());
+                return null;
+            }
+
+            this.stream = stream;
+            video.srcObject = stream;
+            try { await video.play(); } catch { /* interrupted by teardown */ }
+            if (session !== this.session) return null;
+
+            const detector = new BarcodeDetector({ formats });
+            const scan = async () => {
+                if (session !== this.session) return;
+                try {
+                    const codes = await detector.detect(video);
+                    if (session === this.session && codes.length > 0) {
+                        const value = codes[0].rawValue;
+                        this.stop();
+                        await dotnetRef.invokeMethodAsync("OnBarcodeDetected", value);
+                        return;
+                    }
+                } catch { /* frame not ready yet */ }
+                if (session === this.session) setTimeout(scan, 150);
+            };
+            scan();
+            return null;
+        },
+
+        stop: function () {
+            this.session++;
+            this.releaseStream();
+        },
+
+        releaseStream: function () {
+            if (this.stream) {
+                this.stream.getTracks().forEach(t => t.stop());
+                this.stream = null;
+            }
+        },
+    },
+
     // PWA install helper: same walkthrough-based experience in every browser.
     install: {
         // True when running as an installed app (its own window / home-screen launch).

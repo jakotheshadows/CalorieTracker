@@ -1,0 +1,16 @@
+@implements IAsyncDisposable
+
+@* Inline camera barcode scanner (native BarcodeDetector, Chrome on Android) with a
+   manual number-entry fallback that works in every browser. *@
+<div class="scanner-panel">
+    <div class="usda-search-row usda-status-row">
+        <span class="muted small">@(_error ?? "Point the camera at the product's barcode…")</span>
+        <span class="spacer"></span>
+        <button class="btn" @onclick="CloseAsync">Close</button>
+    </div>
+    <video id="@_videoId" class="scanner-video @(_error is null ? "" : "hidden")" muted playsinline></video>
+    <div class="add-row">
+        <input class="input" inputmode="numeric" placeholder="…or type the barcode number" @bind="_manualCode" />
+        <button class="btn btn-accent" disabled="@(string.IsNullOrWhiteSpace(_manualCode))" @onclick="SubmitManualAsync">Look up</button>
+    </div>
+</div>

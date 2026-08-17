@@ -23,6 +23,9 @@ public class UsdaFood
     /// <summary>Label household text, e.g. "0.5 cup" (branded foods only).</summary>
     public string? LabelServingText { get; init; }
 
+    /// <summary>Package barcode (branded foods only), as reported by FDC.</summary>
+    public string? GtinUpc { get; init; }
+
     public double? CaloriesPer100 { get; init; }
     public Dictionary<string, double> NutrientsPer100 { get; init; } = new();
 
@@ -114,6 +117,78 @@ public class UsdaService(LocalStore store, HttpClient http)
         return await SearchWithKeyAsync(key, query, 12);
     }
 
+    /// <summary>Look up a scanned/typed GTIN/UPC. Matches on FDC's gtinUpc, ignoring leading zeros.</summary>
+    public async Task<(UsdaFood? Food, string? Error)> LookupBarcodeAsync(string code)
+    {
+        var key = await GetApiKeyAsync();
+        if (key is null) return (null, "No API key configured. Add one in Settings.");
+
+        var digits = new string(code.Where(char.IsDigit).ToArray());
+        if (digits.Length < 8) return (null, "That doesn't look like a product barcode.");
+
+        // FDC's text search only matches the exact stored gtinUpc string, and its zero-padding
+        // varies (12/13/14 digits) while scanners emit UPC-A (12) or EAN-13 (13) — so try the
+        // code at each standard width until one hits. An 8-digit UPC-E is a mid-code zero
+        // suppression of UPC-A (padding can never match), so expand it first; EAN-8 pads fine.
+        var accepted = new HashSet<string>();
+        var candidates = new List<string>();
+
+        if (digits.Length == 8 && ExpandUpcE(digits) is { } upcA)
+        {
+            var expandedTrim = upcA.TrimStart('0');
+            accepted.Add(expandedTrim);
+            candidates.AddRange(new[] { 12, 13, 14 }.Select(len => expandedTrim.PadLeft(len, '0')));
+        }
+
+        var trimmed = digits.TrimStart('0');
+        accepted.Add(trimmed);
+        candidates.AddRange(new[] { digits.Length, 12, 13, 14 }
+            .Where(len => len >= trimmed.Length && len >= 8)
+            .Select(len => trimmed.PadLeft(len, '0')));
+
+        string? lastError = null;
+        foreach (var candidate in candidates.Distinct())
+        {
+            var (results, error) = await SearchWithKeyAsync(key, candidate, 10);
+            if (error is not null) { lastError = error; continue; }
+            var match = results!.FirstOrDefault(f =>
+                f.GtinUpc is { } gtin && accepted.Contains(new string(gtin.Where(char.IsDigit).ToArray()).TrimStart('0')));
+            if (match is not null) return (match, null);
+        }
+        return (null, lastError ?? $"No USDA food matches barcode {digits} — try the name search instead.");
+    }
+
+    /// <summary>
+    /// Expand an 8-digit UPC-E (number system 0/1) to its 12-digit UPC-A per GS1 zero
+    /// suppression. Null when the input isn't a valid UPC-E (wrong shape or check digit).
+    /// </summary>
+    public static string? ExpandUpcE(string code)
+    {
+        if (code.Length != 8 || code[0] is not ('0' or '1') || !code.All(char.IsDigit)) return null;
+        var x = code.Substring(1, 6);
+        var body = x[5] switch
+        {
+            '0' or '1' or '2' => $"{x[0]}{x[1]}{x[5]}0000{x[2]}{x[3]}{x[4]}",
+            '3' => $"{x[0]}{x[1]}{x[2]}00000{x[3]}{x[4]}",
+            '4' => $"{x[0]}{x[1]}{x[2]}{x[3]}00000{x[4]}",
+            _ => $"{x[0]}{x[1]}{x[2]}{x[3]}{x[4]}0000{x[5]}",
+        };
+        var upcA = $"{code[0]}{body}{code[7]}";
+        return UpcACheckDigit(upcA) == code[7] ? upcA : null;
+    }
+
+    /// <summary>UPC-A check digit computed from the first 11 digits (odd positions ×3).</summary>
+    private static char UpcACheckDigit(string upcA)
+    {
+        var sum = 0;
+        for (var i = 0; i < 11; i++)
+        {
+            var d = upcA[i] - '0';
+            sum += i % 2 == 0 ? d * 3 : d;
+        }
+        return (char)('0' + (10 - sum % 10) % 10);
+    }
+
     private async Task<(List<UsdaFood>? Results, string? Error)> SearchWithKeyAsync(string key, string query, int pageSize)
     {
         if (string.IsNullOrWhiteSpace(query)) return (new List<UsdaFood>(), null);
@@ -164,7 +239,9 @@ public class UsdaService(LocalStore store, HttpClient http)
             }
         }
 
-        double? caloriesPer100 = null;
+        // Some Branded records repeat a nutrient with divergent values; the first row is the
+        // canonical per-100 figure, so first occurrence wins throughout.
+        double? kcal208 = null, kcalAtwater = null;
         var nutrientsPer100 = new Dictionary<string, double>();
         if (food.TryGetProperty("foodNutrients", out var list))
         {
@@ -173,12 +250,15 @@ public class UsdaService(LocalStore store, HttpClient http)
                 if (!n.TryGetProperty("value", out var v) || !v.TryGetDouble(out var value)) continue;
                 var number = n.TryGetProperty("nutrientNumber", out var num) ? num.GetString() ?? "" : "";
                 // Energy: prefer 208 (kcal); Foundation foods may only have Atwater energy (957/958).
-                if (number == "208" || ((number == "957" || number == "958") && caloriesPer100 is null))
-                    caloriesPer100 = value;
+                if (number == "208")
+                    kcal208 ??= value;
+                else if (number == "957" || number == "958")
+                    kcalAtwater ??= value;
                 else if (NutrientMap.TryGetValue(number, out var nutrientKey) && value > 0)
-                    nutrientsPer100[nutrientKey] = value;
+                    nutrientsPer100.TryAdd(nutrientKey, value);
             }
         }
+        var caloriesPer100 = kcal208 ?? kcalAtwater;
 
         return new UsdaFood
         {
@@ -187,6 +267,7 @@ public class UsdaService(LocalStore store, HttpClient http)
             Brand = food.TryGetProperty("brandOwner", out var b) ? ToTitleCase(b.GetString() ?? "") :
                     food.TryGetProperty("brandName", out var bn) ? ToTitleCase(bn.GetString() ?? "") : null,
             DataType = food.TryGetProperty("dataType", out var dt) ? dt.GetString() ?? "" : "",
+            GtinUpc = food.TryGetProperty("gtinUpc", out var gtin) ? gtin.GetString() : null,
             BaseUnit = baseUnit,
             LabelServingAmount = labelAmount,
             LabelServingText = labelText,

@@ -12,6 +12,8 @@ public partial class UsdaNameField
     [Parameter] public EventCallback<UsdaApplied> OnApplied { get; set; }
 
     private bool _open;
+    private bool _scanning;
+    private string? _initialBarcode;
     private UsdaPanel? _panel;
     private int? _fdcId;
 
@@ -20,8 +22,33 @@ public partial class UsdaNameField
     // First click opens the panel, which searches the name on init; later clicks re-search.
     private async Task SearchClickAsync()
     {
-        if (!_open) _open = true;
-        else if (_panel is not null) await _panel.SearchAsync(Value);
+        if (!_open)
+        {
+            _initialBarcode = null;
+            _open = true;
+        }
+        else if (_panel is not null)
+        {
+            await _panel.SearchAsync(Value);
+        }
+    }
+
+    private void ToggleScan() => _scanning = !_scanning;
+
+    // A scanned/typed barcode: close the scanner and hand the code to the results panel —
+    // via its init parameter when it opens fresh, or directly when it's already showing.
+    private async Task OnBarcodeAsync(string code)
+    {
+        _scanning = false;
+        if (!_open)
+        {
+            _initialBarcode = code;
+            _open = true;
+        }
+        else if (_panel is not null)
+        {
+            await _panel.LookupBarcodeAsync(code);
+        }
     }
 
     private async Task HandleAppliedAsync(UsdaApplied a)
