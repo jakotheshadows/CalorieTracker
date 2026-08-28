@@ -83,15 +83,16 @@ window.calTracker = {
         document.querySelector('meta[name="app-version"]')?.content || "dev",
 
     // Camera barcode scanning: the native BarcodeDetector API where the browser has a
-    // decoder (Chrome on Android), otherwise the vendored ZXing library (desktop
-    // Chrome/Edge/Firefox, iOS Safari), lazy-loaded on first scan.
+    // decoder (Chrome on Android), otherwise the vendored zxing-wasm reader (the C++
+    // ZXing rewrite — far stronger on blurry/tilted webcam frames than the old JS port),
+    // lazy-loaded on first scan.
     // A session counter guards every await and the detect loop: stop() (or a newer
     // start()) bumps it, so a cancelled start releases the camera it just acquired and
     // a superseded loop exits instead of touching the new session's state.
     scanner: {
         stream: null,
         session: 0,
-        zxingLoading: null,
+        wasmLoading: null,
 
         // Starts the camera + detection loop. Returns null on success or a
         // user-facing error message; on a hit calls dotnetRef.OnBarcodeDetected(value).
@@ -114,7 +115,7 @@ window.calTracker = {
 
             return detector
                 ? await this.runNative(session, video, detector, dotnetRef)
-                : await this.runZxing(session, video, dotnetRef);
+                : await this.runWasm(session, video, dotnetRef);
         },
 
         // High resolution + continuous focus give 1D decoding enough sharp pixels;
@@ -173,9 +174,10 @@ window.calTracker = {
             return null;
         },
 
-        runZxing: async function (session, video, dotnetRef) {
+        runWasm: async function (session, video, dotnetRef) {
+            let zxing;
             try {
-                await this.loadZxing();
+                zxing = await this.loadWasmReader();
             } catch {
                 return "Couldn't load the barcode scanner — type the number instead.";
             }
@@ -184,57 +186,38 @@ window.calTracker = {
             const err = await this.openCamera(session, video);
             if (err !== null || session !== this.session) return err;
 
-            const hints = new Map();
-            hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-                ZXing.BarcodeFormat.EAN_13,
-                ZXing.BarcodeFormat.UPC_A,
-                ZXing.BarcodeFormat.EAN_8,
-                ZXing.BarcodeFormat.UPC_E,
-            ]);
-            // TRY_HARDER copes with the soft focus and low contrast of typical webcams.
-            hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-            const reader = new ZXing.MultiFormatReader();
-            reader.setHints(hints);
-
-            const region = document.createElement("canvas");
-            const decodeCanvas = (canvas) => {
-                try {
-                    const source = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
-                    const bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source));
-                    return reader.decodeWithState(bitmap).getText();
-                } catch { return null; /* nothing found in this attempt */ }
+            const frame = document.createElement("canvas");
+            const ctx = frame.getContext("2d", { willReadFrequently: true });
+            const baseOpts = {
+                formats: ["EAN-13", "UPC-A", "EAN-8", "UPC-E"],
+                tryHarder: true,
+                tryRotate: true,
+                tryInvert: true,
             };
-
-            // Draws the band around the aiming line, optionally rotation-corrected and
-            // upscaled, and tries to decode it. Decoding tolerates only a couple degrees
-            // of tilt, so small angle corrections plus frame-to-frame hand jitter do the
-            // rest; 2x magnification covers barcodes that are small in the frame.
-            const decodeBand = (w, h, angleDeg, scale) => {
-                const sx = Math.round(w * 0.10), sw = Math.round(w * 0.80);
-                const sy = Math.round(h * 0.28), sh = Math.round(h * 0.44);
-                region.width = sw * scale;
-                region.height = sh * scale;
-                const ctx = region.getContext("2d");
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                ctx.translate(region.width / 2, region.height / 2);
-                ctx.rotate(angleDeg * Math.PI / 180);
-                ctx.drawImage(video, sx, sy, sw, sh, -region.width / 2, -region.height / 2, region.width, region.height);
-                return decodeCanvas(region);
-            };
+            // The default LocalAverage binarizer handles uneven real-world lighting;
+            // FixedThreshold rescues soft, low-contrast frames it gives up on.
+            const binarizers = ["LocalAverage", "FixedThreshold"];
 
             // Blurry frames can decode into a wrong-but-checksum-valid code, so a value
-            // is only accepted once two attempts in a row agree on it.
+            // is only accepted once two ticks agree on it.
             let candidate = null;
             const scan = async () => {
                 if (session !== this.session) return;
                 const w = video.videoWidth, h = video.videoHeight;
                 if (w > 0 && h > 0) {
                     let text = null;
-                    for (const [angle, scale] of [[0, 1], [-4, 1], [4, 1], [0, 2]]) {
-                        text = decodeBand(w, h, angle, scale);
-                        if (text !== null) break;
-                        if (session !== this.session) return;
-                    }
+                    try {
+                        frame.width = w;
+                        frame.height = h;
+                        ctx.drawImage(video, 0, 0);
+                        const image = ctx.getImageData(0, 0, w, h);
+                        for (const binarizer of binarizers) {
+                            const results = await zxing.readBarcodes(image, { ...baseOpts, binarizer });
+                            const hit = results.find(r => r.isValid && r.text);
+                            if (hit) { text = hit.text; break; }
+                            if (session !== this.session) return;
+                        }
+                    } catch { /* decoder hiccup on this frame */ }
 
                     if (text !== null && session === this.session) {
                         if (text === candidate) {
@@ -245,24 +228,21 @@ window.calTracker = {
                         candidate = text;
                     }
                 }
-                if (session === this.session) setTimeout(scan, 100);
+                if (session === this.session) setTimeout(scan, 120);
             };
             scan();
             return null;
         },
 
-        loadZxing: function () {
-            if (window.ZXing) return Promise.resolve();
-            if (!this.zxingLoading) {
-                this.zxingLoading = new Promise((resolve, reject) => {
-                    const s = document.createElement("script");
-                    s.src = "js/zxing.min.js";
-                    s.onload = resolve;
-                    s.onerror = () => { this.zxingLoading = null; reject(new Error("script load failed")); };
-                    document.head.appendChild(s);
+        loadWasmReader: function () {
+            if (!this.wasmLoading) {
+                // The ES module resolves zxing_reader.wasm next to itself in js/.
+                this.wasmLoading = import("./zxing-wasm-reader.js").catch(err => {
+                    this.wasmLoading = null;
+                    throw err;
                 });
             }
-            return this.zxingLoading;
+            return this.wasmLoading;
         },
 
         cameraError: function (err) {
