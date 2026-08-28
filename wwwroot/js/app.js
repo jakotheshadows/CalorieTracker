@@ -118,14 +118,16 @@ window.calTracker = {
                 : await this.runWasm(session, video, dotnetRef);
         },
 
-        // High resolution + continuous focus give 1D decoding enough sharp pixels;
-        // fixed-focus webcams at 640x480 rarely resolve the bars.
+        // Ask for the camera's maximum resolution (ideal 4K pulls whatever the sensor
+        // can do; a 1080p cam still yields 1080p). Pixels per bar module are the
+        // decisive factor: a small bottle's barcode at arm's length is undecodable at
+        // 1080p but fine at 4K, which is how commercial scanner demos win.
         cameraConstraints: function () {
             return {
                 video: {
                     facingMode: { ideal: "environment" },
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 },
+                    width: { ideal: 3840 },
+                    height: { ideal: 2160 },
                     advanced: [{ focusMode: "continuous" }],
                 },
                 audio: false,
