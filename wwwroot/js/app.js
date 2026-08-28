@@ -213,11 +213,20 @@ window.calTracker = {
                         frame.height = h;
                         ctx.drawImage(video, 0, 0);
                         const image = ctx.getImageData(0, 0, w, h);
-                        for (const binarizer of binarizers) {
-                            const results = await zxing.readBarcodes(image, { ...baseOpts, binarizer });
-                            const hit = results.find(r => r.isValid && r.text);
-                            if (hit) { text = hit.text; break; }
-                            if (session !== this.session) return;
+                        decode: for (const red of [false, true]) {
+                            if (red) {
+                                // Red-channel pass: colored inks (blue bars on bottles are
+                                // common) are dark in the red channel but washed out in
+                                // luminance grayscale — same trick as red-laser scanners.
+                                const d = image.data;
+                                for (let i = 0; i < d.length; i += 4) d[i + 1] = d[i + 2] = d[i];
+                            }
+                            for (const binarizer of binarizers) {
+                                const results = await zxing.readBarcodes(image, { ...baseOpts, binarizer });
+                                const hit = results.find(r => r.isValid && r.text);
+                                if (hit) { text = hit.text; break decode; }
+                                if (session !== this.session) return;
+                            }
                         }
                     } catch { /* decoder hiccup on this frame */ }
 
