@@ -1,43 +1,68 @@
-# UPC waveform decoder (experiment — not shipped)
+# UPC waveform decoder
 
-An attempt to read barcodes that are too small/blurry for binarizing decoders
-(zxing-wasm included), the way commercial engines like Dynamsoft do: treat the scan
-band as a 1D analog waveform and decode it by model fitting instead of thresholding.
+Reads barcodes that are too **blurry** for binarizing decoders (zxing-wasm included),
+the way commercial engines do: treat the scan band as a 1D analog waveform and decode
+it by model fitting instead of thresholding. Since 2026-08-29 the decoder **ships** in
+the app (`wwwroot/js/upc-waveform.js`, run off-thread by `wwwroot/js/upc-worker.js`)
+as a companion to zxing-wasm, targeting the close-held regime: webcams cannot focus
+close, so a barcode held near the lens is large but heavily defocused — big modules,
+soft edges, exactly what binarizers can't read and this model can.
 
-## What it does
+## How it works
 
-- Averages the scan band (red channel — colored inks stay dark) into a sub-pixel
-  profile, normalized against a rolling white level.
-- Models the printed code as bars **with ink spread** convolved with a blur kernel,
-  on a module grid with **quadratic + cubic curvature** (curved labels).
-- Anchors the grid via guard patterns + **quiet zones**, seeded from a variance
-  **envelope** estimate of the code's extent.
-- Decodes digits by maximum-likelihood template matching (no binarization), with
-  beam search + forced check digit, then **ICM sweeps** (single + adjacent-pair digit
-  moves alternated with geometry refits).
-- Verifies candidates under **frozen physics** (per-candidate blur must not be a free
-  parameter — wrong strings hide behind extra smear) with geometry-only refinement,
-  scored jointly across multiple bands.
+- `locate()` finds the code in the band (row-averaged gradient energy, fill-fraction
+  gate so codeless frames refuse in microseconds).
+- `extractProfile()` averages the band into sub-pixel profiles (red channel — colored
+  inks stay dark), rescaled so any code lands at ~1.2 px/module, normalized against a
+  **linear white baseline anchored in the quiet zones** (a rolling local max dips over
+  ink-dense digit runs and biases decoding toward sparser wrong digits — measured),
+  with the illumination ramp divided out.
+- The printed code is modeled as bars + ink spread convolved with a **Gaussian** edge
+  response on a curved module grid (quadratic + cubic). Per-segment amplitude fits are
+  **clamped to the frame's global ink amplitude** so wrong templates can't amplify
+  their way into matching.
+- Physics (blur σ, ink spread) is fitted per frame on **known structure only** —
+  guard patterns extended with their structurally-determined neighbor modules, plus
+  the digit-agnostic free-digit fit — then **frozen** for every candidate (per-candidate
+  physics lets wrong strings hide behind smear).
+- Digits decode by ML template matching with beam search + forced check digit, then
+  ICM repairs: singles, adjacent pairs, and **distant cousin pairs** (one-bar-shift
+  digit confusions are the degeneracy family under blur; two of them at distant
+  positions cancel in the check digit, so no chain of improving single moves connects
+  them).
+- Verification is joint across three sub-bands, then the winner must pass:
+  - `mwPx >= 2` (below ~2 px/module a single frame is information-ambiguous — proven
+    on a real 1 px/module frame where a wrong checksum-valid code fit better than the
+    truth),
+  - runner-up ratio <= 0.85,
+  - **cousin margin**: every one-bar-shift substitution of the winner is scored
+    (checksum-free); if any comes within 10%, the frame doesn't determine those
+    digits and the decode is refused. This is what makes confident misreads not ship:
+    in the synthetic suite the model's best guess is wrong on the two hardest frames,
+    and this gate refuses both.
 
-## Status / findings (2026-08-28)
-
-- Synthetic self-tests pass: decodes 1.05 px/module codes through blur, ink spread,
-  and curvature that defeat zxing-wasm (`selfTest()` in the module).
-- On the real test frame (Spring Valley bottle, ~100 px barcode, blue ink, glare,
-  cylinder curvature, truth `713733788632`): **the model's best checksum-valid
-  explanation of the extracted profiles is a wrong code** (`711113388632`, honest
-  joint score 2784 vs truth 3415). The information in a single 1080p frame of this
-  scene is genuinely ambiguous under a 1D model — this is a modeling ceiling, not a
-  search failure (the search *does* find the global-best string).
-- Conclusion: shipping this would produce confident misreads on exactly the frames
-  it exists for. The missing pieces commercial engines have: per-row 2D rectification
-  of label curvature (our 1D shear projection loses the weak-signal mid-region) and
-  multi-frame fusion. Either is a substantial project.
+The live scanner (`app.js` scanner.runWasm) feeds the worker the scan-line band
+whenever the worker is idle; results join zxing's double-read confirmation pool, so
+acceptance still requires two agreeing reads across frames/methods.
 
 ## Lab
 
-`lab/` contains Node probes (need `npm i pngjs`, and a `test-frame.png` — a saved
-full-resolution scanner frame; not committed since test frames contain the user's
-surroundings). `harness.js` runs self-tests + a real-frame decode, `icm2.js` the
-joint ICM experiment, `honest.js` the frozen-physics truth-vs-impostor scorer.
-Paths inside point at the repo copy of `upc-waveform.js`; adjust as needed.
+`lab/closeblur.js` (no deps) is the regression suite: synthetic close-held frames —
+blur up to ~1 module, noise, lighting gradient, reversed codes, clutter, plus
+must-refuse cases (no code; 1 px/module). Current state: decodes 6/8, refuses the
+other 2 honestly (σ/mw ≥ ~1.1 — even the true code cannot beat its cousins there,
+measured with forced scoring). `node harness.js self` runs the module self-tests;
+`node harness.js real <frame.png>` (needs `npm i pngjs`) decodes a saved scanner
+frame through the same entry point the worker uses. debug*.js / fitnorm.js are the
+instrumented probes that drove the model fixes. Never commit real frames — they
+show the user's surroundings.
+
+## History
+
+Built 2026-08-28 while chasing Dynamsoft-class reading of a ~100 px barcode in a
+1080p webcam frame. That regime (1.05 px/module) proved information-ambiguous under
+any single-frame 1D model: the honest best fit was a wrong code, so the decoder was
+archived instead of shipped. The close-held investigation (2026-08-29) found the real
+failure mode was defocus, not size — large blurry codes are information-RICH, and the
+decoder ships for that regime with the ambiguity gates above. Remaining levers for
+the tiny-code regime: per-row 2D rectification and true multi-frame fusion.

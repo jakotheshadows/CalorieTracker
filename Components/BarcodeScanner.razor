@@ -4,8 +4,12 @@
    manual number-entry fallback that works in every browser. *@
 <div class="scanner-panel">
     <div class="usda-search-row usda-status-row">
-        <span class="muted small">@(_error ?? "Hold the barcode close — it should fill about a quarter of the view — and keep it steady near the red line.")</span>
+        <span class="muted small">@(_error ?? "Hold the barcode near the red line and keep it steady — a close, slightly blurry code is fine.")</span>
         <span class="spacer"></span>
+        @if (_error is null)
+        {
+            <button class="btn" title="Save the current camera frame as a PNG (stays on your device) — share it if a code won't scan" @onclick="SaveFrameAsync">📸 Save frame</button>
+        }
         <button class="btn" @onclick="CloseAsync">Close</button>
     </div>
     <div class="scanner-viewport @(_error is null ? "" : "hidden")">

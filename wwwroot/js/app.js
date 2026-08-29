@@ -91,8 +91,10 @@ window.calTracker = {
     // a superseded loop exits instead of touching the new session's state.
     scanner: {
         stream: null,
+        video: null,
         session: 0,
         wasmLoading: null,
+        waveWorker: null,
 
         // Starts the camera + detection loop. Returns null on success or a
         // user-facing error message; on a hit calls dotnetRef.OnBarcodeDetected(value).
@@ -150,9 +152,34 @@ window.calTracker = {
             }
 
             this.stream = stream;
+            this.video = video;
             video.srcObject = stream;
             try { await video.play(); } catch { /* interrupted by teardown */ }
             return null;
+        },
+
+        // Downloads the current camera frame as a PNG (stays on the user's machine).
+        // Lets a user hand over a frame the scanner fails on, so decoding can be
+        // tuned against real failures instead of guesses.
+        saveFrame: function () {
+            const video = this.video;
+            if (!video || !video.videoWidth) return false;
+            const c = document.createElement("canvas");
+            c.width = video.videoWidth;
+            c.height = video.videoHeight;
+            c.getContext("2d").drawImage(video, 0, 0);
+            c.toBlob((blob) => {
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "caltrack-frame-" + Date.now() + ".png";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            }, "image/png");
+            return true;
         },
 
         runNative: async function (session, video, detector, dotnetRef) {
@@ -201,8 +228,49 @@ window.calTracker = {
             const binarizers = ["LocalAverage", "FixedThreshold"];
 
             // Blurry frames can decode into a wrong-but-checksum-valid code, so a value
-            // is only accepted once two ticks agree on it.
+            // is only accepted once two reads agree on it (zxing ticks and waveform
+            // results share the pool, so cross-method agreement counts too).
             let candidate = null;
+            const accept = async (text) => {
+                if (session !== this.session) return;
+                if (text === candidate) {
+                    this.stop();
+                    await dotnetRef.invokeMethodAsync("OnBarcodeDetected", text);
+                    return;
+                }
+                candidate = text;
+            };
+
+            // Waveform side-channel: zxing binarizes, so it fails on close-held codes a
+            // fixed-focus webcam can't focus (big modules, defocus blur). The model-
+            // fitting decoder handles exactly that; it runs in a worker off-thread and
+            // is fed the scan-line band whenever it's idle. Its own gates (>=2 px/module,
+            // decisive-margin) plus the double-read rule guard against misreads.
+            let waveBusy = false, waveSeq = 0;
+            if (!this.waveWorker) {
+                try { this.waveWorker = new Worker("js/upc-worker.js"); } catch { /* optional */ }
+            }
+            const wave = this.waveWorker;
+            if (wave) {
+                wave.onmessage = (ev) => {
+                    waveBusy = false;
+                    const { seq, result } = ev.data;
+                    if (session !== this.session || seq !== waveSeq) return;
+                    if (result && result.digits) accept(result.digits);
+                };
+            }
+            const feedWave = (ctx2d, w, h) => {
+                if (!wave || waveBusy) return;
+                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
+                const y0 = (h - bandH) >> 1;
+                const band = ctx2d.getImageData(0, y0, w, bandH);
+                waveBusy = true;
+                waveSeq++;
+                wave.postMessage(
+                    { seq: waveSeq, width: band.width, height: band.height, buffer: band.data.buffer },
+                    [band.data.buffer]);
+            };
+
             const scan = async () => {
                 if (session !== this.session) return;
                 const w = video.videoWidth, h = video.videoHeight;
@@ -212,6 +280,7 @@ window.calTracker = {
                         frame.width = w;
                         frame.height = h;
                         ctx.drawImage(video, 0, 0);
+                        feedWave(ctx, w, h);
                         const image = ctx.getImageData(0, 0, w, h);
                         decode: for (const red of [false, true]) {
                             if (red) {
@@ -230,14 +299,7 @@ window.calTracker = {
                         }
                     } catch { /* decoder hiccup on this frame */ }
 
-                    if (text !== null && session === this.session) {
-                        if (text === candidate) {
-                            this.stop();
-                            await dotnetRef.invokeMethodAsync("OnBarcodeDetected", text);
-                            return;
-                        }
-                        candidate = text;
-                    }
+                    if (text !== null) await accept(text);
                 }
                 if (session === this.session) setTimeout(scan, 120);
             };
@@ -271,6 +333,11 @@ window.calTracker = {
             if (this.stream) {
                 this.stream.getTracks().forEach(t => t.stop());
                 this.stream = null;
+            }
+            this.video = null;
+            if (this.waveWorker) {
+                this.waveWorker.terminate();
+                this.waveWorker = null;
             }
         },
     },

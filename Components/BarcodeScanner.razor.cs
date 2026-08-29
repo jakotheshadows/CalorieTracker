@@ -26,6 +26,13 @@ public partial class BarcodeScanner
     [JSInvokable]
     public Task OnBarcodeDetected(string code) => OnDetected.InvokeAsync(code);
 
+    private async Task SaveFrameAsync()
+    {
+        // Downloads the current camera frame locally, so a frame the scanner fails on
+        // can be shared for decoder tuning.
+        await JS.InvokeVoidAsync("calTracker.scanner.saveFrame");
+    }
+
     private async Task SubmitManualAsync()
     {
         var code = _manualCode.Trim();
