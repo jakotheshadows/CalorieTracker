@@ -429,7 +429,7 @@ textarea.input { resize: vertical; }
     border-radius: 6px;
     box-shadow: 0 0 10px rgba(255, 165, 60, .45);
     pointer-events: none;
-    transition: left .12s linear, width .12s linear, top .12s linear;
+    transition: left .12s linear, width .12s linear, top .12s linear, transform .12s linear;
 }
 .scan-box.hidden { display: none; }
 .scan-line {

@@ -396,6 +396,9 @@ window.calTracker = {
                         box.style.width = ((c.xr - c.xl) * scale) + "px";
                         box.style.top = (y0 * scale + offY) + "px";
                         box.style.height = (bandH * scale) + "px";
+                        // Tilt the box to the measured bar angle (slope = dx/dy;
+                        // CSS +deg is clockwise, which corresponds to negative slope).
+                        box.style.transform = "rotate(" + (-Math.atan(c.slope || 0) * 180 / Math.PI).toFixed(1) + "deg)";
                         box.classList.remove("hidden");
                         this.boxSeenAt = Date.now();
                     }

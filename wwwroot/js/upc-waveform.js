@@ -794,21 +794,28 @@
         return prof;
     }
 
-    // Find the barcode's horizontal extent in a band of ImageData. A barcode is a
-    // dense run of strong vertical edges that persists across rows; smooth gradient
-    // energy along x and take the longest strong run. Returns {xl, xr, mwEst} in
-    // native px or null. Only needs to be in the ballpark: decodeProfile re-derives
-    // the precise extent from its own variance envelope after rescaling.
+    // Find the barcode's horizontal extent in a band of ImageData. Returns up to 3
+    // ranked candidates {xl, xr, mwEst, crossings, slope} in native px, or null.
+    // slope is the bar lines' dx/dy tilt — a hand-held code is rarely upright, and
+    // averaging straight down a tilted code smears columns by rows*tan(theta) px,
+    // which destroys more information than the defocus itself. Only needs to be in
+    // the ballpark: decodeProfile re-derives the precise extent after rescaling.
     function locate(img, y1, y2) {
         const W = img.width, data = img.data;
         if (W < 60 || y2 - y1 < 4) return null;
+        const rows = y2 - y1;
+        // Row-average over a NARROW central strip, not the full band: tilt smears the
+        // full-band mean by slope*height px, hiding tilted codes from detection; a
+        // ~60-row strip keeps that under a bar-group width while still averaging
+        // noise well below the crossing hysteresis.
+        const stripH = Math.min(64, rows);
+        const sy1 = y1 + ((rows - stripH) >> 1), sy2 = sy1 + stripH;
         const v = new Float64Array(W);
-        for (let y = y1; y < y2; y++) {
+        for (let y = sy1; y < sy2; y++) {
             const row = y * W;
             for (let x = 0; x < W; x++) v[x] += data[(row + x) * 4];
         }
-        const rows = y2 - y1;
-        for (let x = 0; x < W; x++) v[x] /= rows;
+        for (let x = 0; x < W; x++) v[x] /= stripH;
 
         // A barcode's signature is OSCILLATION: dozens of bar/space alternations of
         // the row-averaged brightness about its local mean. Edge ENERGY cannot find a
@@ -917,34 +924,127 @@
                 }
             }
             const chainCands = [];
-            for (const [a, b] of chains) {
+            const emit = (a, b) => {
                 const count = b - a + 1;
-                if (count < 16) continue; // a UPC has ~59 runs; severe defocus keeps ~24
+                if (count < 16) return; // a UPC has ~59 runs; severe defocus keeps ~24
                 const wch = xs[b] - xs[a];
                 const m = wch * 0.05 + 5; // outer bars extend slightly past their crossings
                 const xl = Math.max(0, Math.round(xs[a] - m));
                 const xr = Math.min(W - 1, Math.round(xs[b] + m));
                 const width = xr - xl + 1;
-                if (width < 140 || width > 1600) continue;
+                if (width < 140 || width > 1600) return;
                 chainCands.push({ xl, xr, mwEst: wch / 92, crossings: count });
+            };
+            for (const [a, b] of chains) {
+                emit(a, b);
+                // A chain can be a code MERGED with neighboring print across one
+                // moderate gap — and a merged extent decodes to garbage at the wrong
+                // scale. Legit internal gaps and merge seams overlap in size, so emit
+                // BOTH readings: the chain and its stricter sub-chains; the caller's
+                // decodability pre-rank picks the real one.
+                let s = a, split = false;
+                for (let i = a + 1; i <= b; i++)
+                    if (xs[i] - xs[i - 1] > 2.5 * median) {
+                        if (i - 1 > s) emit(s, i - 1);
+                        s = i;
+                        split = true;
+                    }
+                if (split && b > s) emit(s, b);
             }
             chainCands.sort((u, w) => w.crossings - u.crossings);
             cands.push(...chainCands);
         }
 
         // The generators usually agree on a code-bearing region within a few px;
-        // without dedup the same extent is decoded twice (seconds each). On overlap
-        // keep the higher crossing count; ties keep the earlier (generator-1) entry.
+        // without dedup the same extent is decoded twice (seconds each). Dedup only
+        // SIMILAR-width overlaps: a sub-chain nested inside a wider merged chain is a
+        // different reading of the scene, not a duplicate. Keep the higher crossing
+        // count; ties keep the earlier entry.
         const merged = [];
         for (const c of cands) {
+            const cw = c.xr - c.xl;
             const i = merged.findIndex(mc => {
+                const mw2 = mc.xr - mc.xl;
                 const ov = Math.min(mc.xr, c.xr) - Math.max(mc.xl, c.xl);
-                return ov > 0.6 * Math.min(mc.xr - mc.xl, c.xr - c.xl);
+                return ov > 0.6 * Math.min(mw2, cw) && Math.max(mw2, cw) < 1.35 * Math.min(mw2, cw);
             });
             if (i < 0) merged.push(c);
             else if (c.crossings > merged[i].crossings) merged[i] = c;
         }
-        return merged.length ? merged.slice(0, 3) : null;
+        if (!merged.length) return null;
+        // Provisional order (most barcode-like first); scanBand re-ranks the top few
+        // with a decodability pre-score before spending decode seconds.
+        merged.sort((u, w) => w.crossings - u.crossings);
+
+        // Bar tilt per candidate, from the structure tensor of 2D gradients over the
+        // full band: even when blur erases individual modules, dozens of parallel
+        // edges keep a razor-sharp dominant ORIENTATION. phi is the gradient (bar
+        // normal) direction; the bar lines' dx/dy slope follows as -tan(phi).
+        for (const c of merged.slice(0, 4)) {
+            let jxx = 0, jxy = 0, jyy = 0;
+            const x0 = Math.max(1, c.xl), x1 = Math.min(W - 2, c.xr);
+            for (let y = y1 + 2; y < y2 - 2; y += 2) {
+                const row = y * W;
+                for (let x = x0; x <= x1; x += 2) {
+                    const ix = data[(row + x + 1) * 4] - data[(row + x - 1) * 4];
+                    const iy = data[(row + W + x) * 4] - data[(row - W + x) * 4];
+                    jxx += ix * ix;
+                    jxy += ix * iy;
+                    jyy += iy * iy;
+                }
+            }
+            const phi = jxx + jyy > 1 ? 0.5 * Math.atan2(2 * jxy, jxx - jyy) : 0;
+            c.slope = Math.max(-0.5, Math.min(0.5, -Math.tan(phi)));
+        }
+        return merged.slice(0, 4);
+    }
+
+    // Cheap candidate refinement (~150ms): fit a coarse guard + free-digit grid
+    // sweep on the candidate's center-band profile, polish it, and return both a
+    // decodability score and a REFINED extent. Serves two needs at once: ranking
+    // (a merged or clutter extent fits no plausible UPC grid at its implied scale
+    // and scores far worse than a real code), and edge repair (crossing spans grab
+    // adjacent print, and a ±6-module extent error poisons the decode windows —
+    // measured to turn an otherwise-clean decode into garbage).
+    function quickFit(img, loc, y1, y2) {
+        const scale = loc.mwEst / 1.2;
+        const margin = 14 * loc.mwEst;
+        const xa = Math.max(0, loc.xl - margin), xb = Math.min(img.width, loc.xr + margin);
+        const anchors = [
+            [Math.max(xa, loc.xl - 8 * loc.mwEst), loc.xl + 5 * loc.mwEst],
+            [loc.xr - 5 * loc.mwEst, Math.min(xb, loc.xr + 8 * loc.mwEst)],
+        ];
+        const H = y2 - y1;
+        const a = y1 + ((H / 6) | 0), b = y2 - ((H / 6) | 0);
+        const prof = extractProfile(img, xa, xb, a, b, (loc.slope || 0) * (b - a), scale, anchors);
+        const envXl = (loc.xl - xa) / scale, envXr = (loc.xr - xa) / scale;
+        const ia = Math.round(envXl / STEP), ib = Math.round(envXr / STEP);
+        const inside = [...prof.slice(Math.max(0, ia), Math.min(prof.length, ib))].sort((u, v) => u - v);
+        if (inside.length < 20) return { pre: Infinity };
+        prof.amp = inside[Math.floor(inside.length * 0.95)];
+        if (prof.amp < 5) return { pre: Infinity };
+        const spanMw = (envXr - envXl) / 95;
+        const cost = (p) => guardCost(prof, p) + freeDigitFit(prof, p);
+        let best = null;
+        for (const sigmaM of [0.8, 1.2])
+            for (let dm = -0.15; dm <= 0.051; dm += 0.05)
+                for (let dx = -2; dx <= 8; dx += 2) {
+                    const p = { x0: envXl + dx, mw: spanMw + dm, q: 0, sigmaM, e: 0.15 };
+                    if (p.mw < 0.7) continue;
+                    const c = cost(p);
+                    if (!best || c < best.cost) { best = { ...p, cost: c }; }
+                }
+        if (!best) return { pre: Infinity };
+        const g = refine(cost, best, 3);
+        const out = { pre: g.cost / (prof.amp * prof.amp) };
+        // Only the fitted POSITION is trustworthy: the fit's module width runs
+        // ~10% high under heavy blur (free-digit windows prefer stretched grids),
+        // while the crossing-span mwEst is ~unbiased. Report x0; the caller pairs
+        // it with the original module width.
+        const mwReal = g.mw * scale;
+        if (mwReal > 0.75 * loc.mwEst && mwReal < 1.3 * loc.mwEst)
+            out.x0 = xa + g.x0 * scale;
+        return out;
     }
 
     // Live entry point: locate + rescale + joint-decode one horizontal band.
@@ -958,6 +1058,20 @@
         const minMw = o.minMwPx === undefined ? 2.05 : o.minMwPx;
         const cands = locate(img, y1, y2);
         if (!cands) return null;
+        // Refine every candidate before committing decode seconds: crossing counts
+        // alone rank a merged code+print chain above the clean code inside it, and
+        // crossing-span edges routinely grab adjacent print (a ±6-module extent
+        // error poisons the decode windows). Adopt the fitted position only when it
+        // moves meaningfully — small corrections are as likely to be fit noise.
+        for (const c of cands) {
+            const q = quickFit(img, c, y1, y2);
+            c.pre = q.pre;
+            if (q.x0 !== undefined && Math.abs(q.x0 - c.xl) > 3.5 * c.mwEst) {
+                c.xl = Math.round(q.x0);
+                c.xr = Math.round(q.x0 + 95 * c.mwEst);
+            }
+        }
+        if (cands.length > 1) cands.sort((u, w) => u.pre - w.pre);
         const deadline = o.budgetMs ? Date.now() + o.budgetMs : Infinity;
         const maxRatio = o.maxRatio === undefined ? 0.85 : o.maxRatio;
         // Misreads measure cousin <= 0.99 (a confusion fits BETTER than the winner);
@@ -987,7 +1101,19 @@
                 [Math.max(xa, loc.xl - 8 * loc.mwEst), loc.xl + 5 * loc.mwEst],
                 [loc.xr - 5 * loc.mwEst, Math.min(xb, loc.xr + 8 * loc.mwEst)],
             ];
-            const profiles = bands.map(([a, b]) => extractProfile(img, xa, xb, a, b, 0, scale, anchors));
+            // Follow the bars' measured tilt: each sub-band's sampling path shifts by
+            // slope px per row, so a tilted code averages ALONG its bars instead of
+            // smearing across them. Every sub-band shears around the FULL band's
+            // center row (via the off shift): sub-bands sit at different heights, and
+            // shearing each around its own center would displace the three profiles
+            // against each other, breaking decodeJoint's cross-band agreement.
+            const bandMid = (y1 + y2) / 2;
+            const slope = loc.slope || 0;
+            const profiles = bands.map(([a, b]) => {
+                const off = slope * ((a + b) / 2 - bandMid);
+                const anch = anchors.map(([p, q]) => [p + off, q + off]);
+                return extractProfile(img, xa + off, xb + off, a, b, slope * (b - a), scale, anch);
+            });
             // Hand the located extent (in profile coordinates) to candidate generation;
             // its own variance envelope splits heavily-blurred codes.
             const env = { xl: (loc.xl - xa) / scale, xr: (loc.xr - xa) / scale };
@@ -1043,7 +1169,7 @@
         return out;
     }
 
-    const api = { scanBand, locate, decodeProfile, decodeJoint, extractProfile, reverseProfile, synthProfile, selfTest, fullCost, refine, buildModules, guardCost, segCost, cdfFor, gridPos };
+    const api = { scanBand, locate, quickFit, decodeProfile, decodeJoint, extractProfile, reverseProfile, synthProfile, selfTest, fullCost, refine, buildModules, guardCost, segCost, cdfFor, gridPos };
     // Page, Web Worker, and Node-vm lab all load this file; attach wherever exists.
     if (typeof globalThis !== "undefined") globalThis.UpcWaveform = api;
     if (typeof window !== "undefined") window.UpcWaveform = api;

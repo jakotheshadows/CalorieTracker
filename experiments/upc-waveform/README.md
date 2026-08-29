@@ -16,6 +16,14 @@ soft edges, exactly what binarizers can't read and this model can.
   background clutter — measured on a real frame where the energy winner was an
   office chair — but nothing else oscillates ~24-60 times about its local mean).
   Both are filtered by crossing count, so codeless frames refuse in microseconds.
+  Each candidate carries the bars' TILT (structure tensor of 2D gradients — blurred
+  bars keep a razor-sharp orientation signature), and profile extraction follows it
+  (all sub-bands shear around the full band's center row, or their profiles would
+  displace against each other). A cheap guard+free-digit sweep (`quickFit`) then
+  re-ranks candidates by decodability and repairs large extent-position errors
+  (crossing spans grab adjacent print; only the fitted POSITION is adopted — the
+  fitted module width runs ~10% high under heavy blur, while the crossing-span
+  estimate is ~unbiased). `lab/rotation.js` is the tilt regression.
 - `extractProfile()` averages the band into sub-pixel profiles (red channel — colored
   inks stay dark), rescaled so any code lands at ~1.2 px/module, normalized against a
   **linear white baseline anchored in the quiet zones** (a rolling local max dips over
