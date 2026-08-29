@@ -312,13 +312,45 @@ window.calTracker = {
                     }
                 };
             }
+            // Stillness gate: hand motion double-exposes the bars (measured ~8px
+            // ghosting on a real frame — no blur model fits a double image), and the
+            // deep decoder gets one shot every several seconds. Spend it on a frame
+            // captured while the hand was still: mean per-pixel band difference
+            // between ticks, low for two consecutive ticks.
+            const motion = document.createElement("canvas");
+            motion.width = 96;
+            motion.height = 24;
+            const mctx = motion.getContext("2d", { willReadFrequently: true });
+            let lastBand = null, stillTicks = 0, lastWaveAt = Date.now();
+            const motionOf = (w, h) => {
+                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
+                const y0 = (h - bandH) >> 1;
+                mctx.drawImage(frame, 0, y0, w, bandH, 0, 0, 96, 24);
+                const d = mctx.getImageData(0, 0, 96, 24).data;
+                let diff = 0;
+                if (lastBand) {
+                    for (let i = 0; i < d.length; i += 4) diff += Math.abs(d[i] - lastBand[i >> 2]);
+                    diff /= 96 * 24;
+                } else {
+                    diff = 999;
+                }
+                if (!lastBand) lastBand = new Float64Array(96 * 24);
+                for (let i = 0; i < d.length; i += 4) lastBand[i >> 2] = d[i];
+                return diff;
+            };
             const feedWave = (ctx2d, w, h) => {
-                if (!wave || waveBusy || Date.now() < waveCooldownUntil) return;
+                if (!wave) return;
+                stillTicks = motionOf(w, h) < 3.5 ? stillTicks + 1 : 0;
+                if (waveBusy || Date.now() < waveCooldownUntil) return;
+                // Fall back to shaky frames only after 8s without any attempt, so a
+                // trembling hand degrades to the old behavior instead of starving.
+                if (stillTicks < 2 && Date.now() - lastWaveAt < 8000) return;
                 const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
                 const y0 = (h - bandH) >> 1;
                 const band = ctx2d.getImageData(0, y0, w, bandH);
                 waveBusy = true;
                 waveSeq++;
+                lastWaveAt = Date.now();
                 wave.postMessage(
                     { seq: waveSeq, width: band.width, height: band.height, buffer: band.data.buffer },
                     [band.data.buffer]);

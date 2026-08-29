@@ -999,6 +999,69 @@
         return merged.slice(0, 4);
     }
 
+    // Vertical extent of the BARS within the band: rows whose darkness pattern
+    // along x correlates with the band's central column profile (bars repeat down
+    // their whole height; the printed digit line under the code, white label above
+    // it, and glare stripes do not). Averaging non-bar rows into the profiles reads
+    // to the model as extreme blur and poisons decoding — measured on a real frame
+    // where a code SHARPER than previously-decoded ones produced pure garbage
+    // because its bars spanned only ~60% of the band height.
+    function barRows(img, loc, y1, y2) {
+        const W = img.width, data = img.data;
+        const xl = Math.max(0, loc.xl), xr = Math.min(W - 1, loc.xr);
+        const n = xr - xl + 1;
+        const rows = y2 - y1;
+        if (n < 30 || rows < 32) return [y1, y2];
+        const stripH = Math.min(48, rows);
+        const sy1 = y1 + ((rows - stripH) >> 1);
+        const ref = new Float64Array(n);
+        for (let y = sy1; y < sy1 + stripH; y++) {
+            const row = y * W;
+            for (let i = 0; i < n; i++) ref[i] += data[(row + xl + i) * 4];
+        }
+        let refMean = 0;
+        for (let i = 0; i < n; i++) { ref[i] /= stripH; refMean += ref[i]; }
+        refMean /= n;
+        let refVar = 0;
+        for (let i = 0; i < n; i++) refVar += (ref[i] - refMean) * (ref[i] - refMean);
+        if (refVar < 1e-6) return [y1, y2];
+        const slope = loc.slope || 0;
+        const midY = (y1 + y2) / 2;
+        const corr = new Float64Array(rows);
+        for (let y = y1; y < y2; y++) {
+            const row = y * W;
+            const shift = slope * (y - midY);
+            let m = 0;
+            const vals = new Float64Array(n);
+            for (let i = 0; i < n; i++) {
+                const x = Math.max(0, Math.min(W - 1, Math.round(xl + i + shift)));
+                vals[i] = data[(row + x) * 4];
+                m += vals[i];
+            }
+            m /= n;
+            let cv = 0, vv = 0;
+            for (let i = 0; i < n; i++) {
+                cv += (vals[i] - m) * (ref[i] - refMean);
+                vv += (vals[i] - m) * (vals[i] - m);
+            }
+            corr[y - y1] = vv > 1e-6 ? cv / Math.sqrt(vv * refVar) : 0;
+        }
+        // Expand from the band center while rows still look like bars (small gaps
+        // tolerated: a glare line can cross the bars without ending them).
+        const c0 = Math.floor(rows / 2);
+        let top = c0, bot = c0;
+        for (let y = c0 - 1, gap = 0; y >= 0; y--) {
+            if (corr[y] >= 0.5) { top = y; gap = 0; }
+            else if (++gap > 4) break;
+        }
+        for (let y = c0 + 1, gap = 0; y < rows; y++) {
+            if (corr[y] >= 0.5) { bot = y; gap = 0; }
+            else if (++gap > 4) break;
+        }
+        if (bot - top < 24) return [y1, y2];
+        return [y1 + top, y1 + bot + 1];
+    }
+
     // Cheap candidate refinement (~150ms): fit a coarse guard + free-digit grid
     // sweep on the candidate's center-band profile, polish it, and return both a
     // decodability score and a REFINED extent. Serves two needs at once: ranking
@@ -1014,8 +1077,10 @@
             [Math.max(xa, loc.xl - 8 * loc.mwEst), loc.xl + 5 * loc.mwEst],
             [loc.xr - 5 * loc.mwEst, Math.min(xb, loc.xr + 8 * loc.mwEst)],
         ];
-        const H = y2 - y1;
-        const a = y1 + ((H / 6) | 0), b = y2 - ((H / 6) | 0);
+        const ry1 = loc.by1 === undefined ? y1 : loc.by1;
+        const ry2 = loc.by2 === undefined ? y2 : loc.by2;
+        const H = ry2 - ry1;
+        const a = ry1 + ((H / 6) | 0), b = ry2 - ((H / 6) | 0);
         const prof = extractProfile(img, xa, xb, a, b, (loc.slope || 0) * (b - a), scale, anchors);
         const envXl = (loc.xl - xa) / scale, envXr = (loc.xr - xa) / scale;
         const ia = Math.round(envXl / STEP), ib = Math.round(envXr / STEP);
@@ -1064,6 +1129,9 @@
         // error poisons the decode windows). Adopt the fitted position only when it
         // moves meaningfully — small corrections are as likely to be fit noise.
         for (const c of cands) {
+            const br = barRows(img, c, y1, y2);
+            c.by1 = br[0];
+            c.by2 = br[1];
             const q = quickFit(img, c, y1, y2);
             c.pre = q.pre;
             if (q.x0 !== undefined && Math.abs(q.x0 - c.xl) > 3.5 * c.mwEst) {
@@ -1085,12 +1153,15 @@
             const margin = 14 * loc.mwEst;
             const xa = Math.max(0, loc.xl - margin);
             const xb = Math.min(img.width, loc.xr + margin);
-            // Three overlapping sub-bands: decodeJoint's cross-band agreement is the
-            // within-frame defense against a wrong code fitting one noisy band.
-            const H = y2 - y1;
+            // Three overlapping sub-bands within the BAR rows only (see barRows):
+            // decodeJoint's cross-band agreement is the within-frame defense against
+            // a wrong code fitting one noisy band.
+            const ry1 = loc.by1 === undefined ? y1 : loc.by1;
+            const ry2 = loc.by2 === undefined ? y2 : loc.by2;
+            const H = ry2 - ry1;
             const bands = H >= 24
-                ? [[y1, y1 + (H * 2 / 3) | 0], [y1 + (H / 6) | 0, y2 - (H / 6) | 0], [y2 - (H * 2 / 3) | 0, y2]]
-                : [[y1, y2]];
+                ? [[ry1, ry1 + (H * 2 / 3) | 0], [ry1 + (H / 6) | 0, ry2 - (H / 6) | 0], [ry2 - (H * 2 / 3) | 0, ry2]]
+                : [[ry1, ry2]];
             // Quiet-zone anchors for the white baseline: ranges STRADDLING the located
             // edges. The mandated quiet zone sits just outside the true edge, but the
             // estimate can err a few modules either way (and print/clutter may sit
@@ -1107,7 +1178,7 @@
             // center row (via the off shift): sub-bands sit at different heights, and
             // shearing each around its own center would displace the three profiles
             // against each other, breaking decodeJoint's cross-band agreement.
-            const bandMid = (y1 + y2) / 2;
+            const bandMid = (ry1 + ry2) / 2;
             const slope = loc.slope || 0;
             const profiles = bands.map(([a, b]) => {
                 const off = slope * ((a + b) / 2 - bandMid);
