@@ -322,9 +322,7 @@ window.calTracker = {
             motion.height = 24;
             const mctx = motion.getContext("2d", { willReadFrequently: true });
             let lastBand = null, stillTicks = 0, lastWaveAt = Date.now();
-            const motionOf = (w, h) => {
-                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
-                const y0 = (h - bandH) >> 1;
+            const motionOf = (w, h, y0, bandH) => {
                 mctx.drawImage(frame, 0, y0, w, bandH, 0, 0, 96, 24);
                 const d = mctx.getImageData(0, 0, 96, 24).data;
                 let diff = 0;
@@ -338,22 +336,26 @@ window.calTracker = {
                 for (let i = 0; i < d.length; i += 4) lastBand[i >> 2] = d[i];
                 return diff;
             };
-            const feedWave = (ctx2d, w, h) => {
-                if (!wave) return;
-                stillTicks = motionOf(w, h) < 3.5 ? stillTicks + 1 : 0;
+            // Feeds the worker the band around the DETECTED code (see
+            // updateDetection) — there is nothing to decode when detection sees
+            // nothing. A band jump (the user moved the code) reads as motion, which
+            // is exactly right: wait for the new position to settle.
+            const feedWave = (image, w, h, choice) => {
+                if (!wave || !choice) return;
+                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
+                const y0 = Math.max(0, Math.min(h - bandH, Math.round((choice.by1 + choice.by2) / 2 - bandH / 2)));
+                stillTicks = motionOf(w, h, y0, bandH) < 3.5 ? stillTicks + 1 : 0;
                 if (waveBusy || Date.now() < waveCooldownUntil) return;
                 // Fall back to shaky frames only after 8s without any attempt, so a
                 // trembling hand degrades to the old behavior instead of starving.
                 if (stillTicks < 2 && Date.now() - lastWaveAt < 8000) return;
-                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
-                const y0 = (h - bandH) >> 1;
-                const band = ctx2d.getImageData(0, y0, w, bandH);
+                const band = new Uint8ClampedArray(image.data.subarray(y0 * w * 4, (y0 + bandH) * w * 4));
                 waveBusy = true;
                 waveSeq++;
                 lastWaveAt = Date.now();
                 wave.postMessage(
-                    { seq: waveSeq, width: band.width, height: band.height, buffer: band.data.buffer },
-                    [band.data.buffer]);
+                    { seq: waveSeq, width: w, height: bandH, buffer: band.buffer },
+                    [band.buffer]);
             };
 
             const scan = async () => {
@@ -365,9 +367,11 @@ window.calTracker = {
                         frame.width = w;
                         frame.height = h;
                         ctx.drawImage(video, 0, 0);
-                        feedWave(ctx, w, h);
-                        this.updateBox(video, ctx, w, h);
+                        // Detection + worker feed run on the pristine frame, BEFORE
+                        // the red-channel pass below mutates it in place.
                         const image = ctx.getImageData(0, 0, w, h);
+                        const choice = this.updateDetection(video, image, w, h);
+                        feedWave(image, w, h, choice);
                         decode: for (const red of [false, true]) {
                             if (red) {
                                 // Red-channel pass: colored inks (blue bars on bottles are
@@ -404,40 +408,92 @@ window.calTracker = {
             document.head.appendChild(s);
         },
 
-        // Live visual feedback: outline the located barcode area over the preview,
-        // independent of (much slower) decoding — the user can tell "it sees the
-        // code" from "it can't read it yet" and adjust distance instead of guessing.
-        updateBox: function (video, ctx2d, w, h) {
+        // Full-frame barcode detection each tick (the code is wherever the user
+        // holds it, not on a center line): overlapping bands are located cheaply,
+        // candidates ranked by crossings x vertical self-similarity (bars repeat
+        // down their height, text lines do not), and the current leader is verified
+        // against actual UPC structure (quickFit, ~150ms) at most every 600ms with
+        // cached results. Returns the chosen candidate for the box + the worker.
+        detectCache: null,
+        lastQuickFitAt: 0,
+        updateDetection: function (video, image, w, h) {
             const U = window.UpcWaveform;
-            const box = video && video.parentElement ? video.parentElement.querySelector(".scan-box") : null;
-            if (!U || !box) return;
-            let cands = null;
+            if (!U) return null;
+            if (!this.detectCache) this.detectCache = new Map();
+            let pool = [];
+            const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
+            const step = Math.max(48, bandH >> 1);
             try {
-                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
-                const y0 = (h - bandH) >> 1;
-                const band = ctx2d.getImageData(0, y0, w, bandH);
-                cands = U.locate(band, 0, band.height);
-                if (cands && cands.length) {
-                    const c = cands[0];
-                    // Map capture coords onto the displayed element (object-fit: cover).
-                    const dispW = video.clientWidth, dispH = video.clientHeight;
-                    if (dispW > 0 && dispH > 0) {
-                        const scale = Math.max(dispW / w, dispH / h);
-                        const offX = (dispW - w * scale) / 2, offY = (dispH - h * scale) / 2;
-                        box.style.left = (c.xl * scale + offX) + "px";
-                        box.style.width = ((c.xr - c.xl) * scale) + "px";
-                        box.style.top = (y0 * scale + offY) + "px";
-                        box.style.height = (bandH * scale) + "px";
-                        // Tilt the box to the measured bar angle (slope = dx/dy;
-                        // CSS +deg is clockwise, which corresponds to negative slope).
-                        box.style.transform = "rotate(" + (-Math.atan(c.slope || 0) * 180 / Math.PI).toFixed(1) + "deg)";
-                        box.classList.remove("hidden");
-                        this.boxSeenAt = Date.now();
-                    }
+                for (let y0 = 0; y0 + bandH <= h; y0 += step) {
+                    const cands = U.locate(image, y0, y0 + bandH);
+                    if (cands)
+                        for (const c of cands.slice(0, 2)) {
+                            c.y0 = y0;
+                            c.y1 = y0 + bandH;
+                            pool.push(c);
+                        }
                 }
-            } catch { /* overlay is best-effort */ }
-            // Linger briefly so the box doesn't flicker on borderline frames.
-            if ((!cands || !cands.length) && Date.now() - this.boxSeenAt > 600) box.classList.add("hidden");
+            } catch { return null; }
+            const box = video && video.parentElement ? video.parentElement.querySelector(".scan-box") : null;
+            if (!pool.length) {
+                if (box && Date.now() - this.boxSeenAt > 600) box.classList.add("hidden");
+                return null;
+            }
+            pool.sort((a, b) => b.crossings - a.crossings);
+            pool = pool.slice(0, 6);
+            const now = Date.now();
+            for (const c of pool) {
+                try {
+                    const br = U.barRows(image, c, c.y0, c.y1);
+                    c.by1 = br[0];
+                    c.by2 = br[1];
+                    c.corr = br[2] === undefined ? 0.5 : br[2];
+                } catch { c.by1 = c.y0; c.by2 = c.y1; c.corr = 0.3; }
+                c.score = c.crossings * Math.max(0.15, c.corr);
+                c.key = c.y0 + ":" + (c.xl >> 5) + ":" + ((c.xr - c.xl) >> 5);
+                const v = this.detectCache.get(c.key);
+                if (v && now - v.t < 2500) c.pre = v.pre;
+            }
+            // Verify the best UNVERIFIED candidate each slot — never only the current
+            // leader, or the first verified region wins forever by default. Over a few
+            // ticks every competitive region gets structurally scored.
+            if (now - this.lastQuickFitAt > 600) {
+                const target = pool
+                    .filter(c => c.pre === undefined)
+                    .reduce((a, b) => (a && a.score >= b.score ? a : b), null);
+                if (target) {
+                    this.lastQuickFitAt = now;
+                    try {
+                        const q = U.quickFit(image, target, target.y0, target.y1);
+                        this.detectCache.set(target.key, { pre: q.pre, t: now });
+                        target.pre = q.pre;
+                    } catch { /* verification is best-effort */ }
+                }
+            }
+            const verified = pool.filter(c => c.pre !== undefined && isFinite(c.pre));
+            const choice = verified.length
+                ? verified.reduce((a, b) => (a.pre <= b.pre ? a : b))
+                : pool.reduce((a, b) => (a.score >= b.score ? a : b));
+            if (this.detectCache.size > 40)
+                for (const [k, v] of this.detectCache) if (now - v.t > 4000) this.detectCache.delete(k);
+            if (box) this.drawBox(video, box, choice, w, h);
+            return choice;
+        },
+
+        // Snug orange box over the chosen candidate (bar rows only), tilted to the
+        // measured bar angle (slope = dx/dy; CSS +deg is clockwise = negative slope).
+        drawBox: function (video, box, c, w, h) {
+            const dispW = video.clientWidth, dispH = video.clientHeight;
+            if (dispW <= 0 || dispH <= 0) return;
+            const scale = Math.max(dispW / w, dispH / h);
+            const offX = (dispW - w * scale) / 2, offY = (dispH - h * scale) / 2;
+            box.style.left = (c.xl * scale + offX) + "px";
+            box.style.width = ((c.xr - c.xl) * scale) + "px";
+            box.style.top = (c.by1 * scale + offY) + "px";
+            box.style.height = ((c.by2 - c.by1) * scale) + "px";
+            box.style.transform = "rotate(" + (-Math.atan(c.slope || 0) * 180 / Math.PI).toFixed(1) + "deg)";
+            box.classList.remove("hidden");
+            this.boxSeenAt = Date.now();
         },
 
         loadWasmReader: function () {

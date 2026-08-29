@@ -1058,8 +1058,23 @@
             if (corr[y] >= 0.5) { bot = y; gap = 0; }
             else if (++gap > 4) break;
         }
-        if (bot - top < 24) return [y1, y2];
-        return [y1 + top, y1 + bot + 1];
+        // Mean row-correlation over the result: the VERTICAL SELF-SIMILARITY of the
+        // region. Bars repeat down their whole height (near 1); text lines do not
+        // (each line differs from the column mean). This is the cheap bars-vs-text
+        // discriminator — orientation coherence fails at it (a line of text has
+        // mostly vertical strokes too), measured on real frames.
+        let mc = 0, span;
+        if (bot - top < 24) {
+            for (let y = 0; y < rows; y++) mc += corr[y];
+            mc /= rows;
+            span = [y1, y2];
+        } else {
+            for (let y = top; y <= bot; y++) mc += corr[y];
+            mc /= bot - top + 1;
+            span = [y1 + top, y1 + bot + 1];
+        }
+        span.push(mc);
+        return span;
     }
 
     // Cheap candidate refinement (~150ms): fit a coarse guard + free-digit grid
@@ -1142,9 +1157,11 @@
         if (cands.length > 1) cands.sort((u, w) => u.pre - w.pre);
         const deadline = o.budgetMs ? Date.now() + o.budgetMs : Infinity;
         const maxRatio = o.maxRatio === undefined ? 0.85 : o.maxRatio;
-        // Misreads measure cousin <= 0.99 (a confusion fits BETTER than the winner);
-        // legitimate decodes measure >= 1.09. 1.08 splits with margin on both sides.
-        const minCousin = o.minCousin === undefined ? 1.08 : o.minCousin;
+        // Misreads measure cousin <= 0.99 (a confusion fits BETTER than the winner,
+        // worst observed 0.992); legitimate decodes cluster from ~1.07 up, with real
+        // mass at 1.07-1.10 (three knife-edge refusals observed at 1.069-1.078).
+        // 1.05 keeps a ~6% margin over the worst misread and stops refusing truths.
+        const minCousin = o.minCousin === undefined ? 1.05 : o.minCousin;
         let lastRefused = null;
 
         for (const loc of cands) {
@@ -1240,7 +1257,7 @@
         return out;
     }
 
-    const api = { scanBand, locate, quickFit, decodeProfile, decodeJoint, extractProfile, reverseProfile, synthProfile, selfTest, fullCost, refine, buildModules, guardCost, segCost, cdfFor, gridPos };
+    const api = { scanBand, locate, quickFit, barRows, decodeProfile, decodeJoint, extractProfile, reverseProfile, synthProfile, selfTest, fullCost, refine, buildModules, guardCost, segCost, cdfFor, gridPos };
     // Page, Web Worker, and Node-vm lab all load this file; attach wherever exists.
     if (typeof globalThis !== "undefined") globalThis.UpcWaveform = api;
     if (typeof window !== "undefined") window.UpcWaveform = api;
