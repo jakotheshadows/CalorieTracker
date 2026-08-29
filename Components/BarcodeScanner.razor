@@ -4,16 +4,33 @@
    manual number-entry fallback that works in every browser. *@
 <div class="scanner-panel">
     <div class="usda-search-row usda-status-row">
-        <span class="muted small">@(_error ?? "Hold the barcode steady near the red line, as close as it stays reasonably sharp — if it looks very blurry, move it a little farther away.")</span>
+        <span class="muted small">@(_error ?? "Hold the barcode steady near the red line, as close as it stays reasonably sharp — an orange box means the scanner sees it.")</span>
         <span class="spacer"></span>
+        @if (_error is null && _cameraInfo is not null)
+        {
+            <span class="muted small">@_cameraInfo</span>
+        }
         @if (_error is null)
         {
             <button class="btn" title="Save the current camera frame as a PNG (stays on your device) — share it if a code won't scan" @onclick="SaveFrameAsync">📸 Save frame</button>
         }
         <button class="btn" @onclick="CloseAsync">Close</button>
     </div>
+    @if (_error is null && _cameras.Count > 1)
+    {
+        <div class="add-row scanner-cam-row">
+            <select class="input" @onchange="OnCameraChangedAsync">
+                <option value="" selected="@(_selectedCameraId is null)">Default camera</option>
+                @foreach (var cam in _cameras)
+                {
+                    <option value="@cam.Id" selected="@(cam.Id == _selectedCameraId)">@cam.Label</option>
+                }
+            </select>
+        </div>
+    }
     <div class="scanner-viewport @(_error is null ? "" : "hidden")">
         <video id="@_videoId" class="scanner-video" muted playsinline></video>
+        <div class="scan-box hidden"></div>
         <div class="scan-line"></div>
     </div>
     <div class="add-row">

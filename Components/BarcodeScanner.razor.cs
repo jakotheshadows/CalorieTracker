@@ -13,18 +13,52 @@ public partial class BarcodeScanner
     private readonly string _videoId = $"scanner-{Guid.NewGuid():N}";
     private string? _error;
     private string _manualCode = "";
+    private string? _cameraInfo;
+    private string? _selectedCameraId;
+    private List<CameraDevice> _cameras = new();
     private DotNetObjectReference<BarcodeScanner>? _selfRef;
+
+    public sealed class CameraDevice
+    {
+        public string Id { get; set; } = "";
+        public string Label { get; set; } = "";
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
         _selfRef = DotNetObjectReference.Create(this);
-        _error = await JS.InvokeAsync<string?>("calTracker.scanner.start", _videoId, _selfRef);
+        // Desktops often expose virtual cameras (OBS etc.) the browser may grab by
+        // default; a remembered explicit choice wins, with JS falling back if gone.
+        _selectedCameraId = await JS.InvokeAsync<string?>("calTracker.storage.get", "caltrack-scanner-camera");
+        if (string.IsNullOrEmpty(_selectedCameraId)) _selectedCameraId = null;
+        _error = await JS.InvokeAsync<string?>("calTracker.scanner.start", _videoId, _selfRef, _selectedCameraId);
         StateHasChanged();
     }
 
     [JSInvokable]
     public Task OnBarcodeDetected(string code) => OnDetected.InvokeAsync(code);
+
+    [JSInvokable]
+    public async Task OnCameraReady(int width, int height)
+    {
+        // Surface the negotiated capture resolution and the device list, so a wrong
+        // camera or a low-res mode is visible instead of silently hurting decoding.
+        _cameraInfo = width > 0 ? $"{width}×{height}" : null;
+        var cams = await JS.InvokeAsync<CameraDevice[]>("calTracker.scanner.listCameras");
+        _cameras = cams.ToList();
+        StateHasChanged();
+    }
+
+    private async Task OnCameraChangedAsync(ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString();
+        _selectedCameraId = string.IsNullOrEmpty(id) ? null : id;
+        await JS.InvokeVoidAsync("calTracker.storage.set", "caltrack-scanner-camera", _selectedCameraId ?? "");
+        _cameraInfo = null;
+        _error = await JS.InvokeAsync<string?>("calTracker.scanner.start", _videoId, _selfRef, _selectedCameraId);
+        StateHasChanged();
+    }
 
     private async Task SaveFrameAsync()
     {

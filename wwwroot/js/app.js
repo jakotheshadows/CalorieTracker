@@ -95,12 +95,18 @@ window.calTracker = {
         session: 0,
         wasmLoading: null,
         waveWorker: null,
+        deviceId: null,
+        locLoading: false,
+        boxSeenAt: 0,
 
         // Starts the camera + detection loop. Returns null on success or a
         // user-facing error message; on a hit calls dotnetRef.OnBarcodeDetected(value).
-        start: async function (videoId, dotnetRef) {
+        // deviceId (optional) picks a specific camera — desktops often have virtual
+        // cameras (OBS etc.) that the browser may grab by default.
+        start: async function (videoId, dotnetRef, deviceId) {
             const session = ++this.session;
             this.teardown();
+            this.deviceId = deviceId || null;
             const video = document.getElementById(videoId);
             if (!video) return "Scanner video element not found.";
 
@@ -125,15 +131,32 @@ window.calTracker = {
         // decisive factor: a small bottle's barcode at arm's length is undecodable at
         // 1080p but fine at 4K, which is how commercial scanner demos win.
         cameraConstraints: function () {
-            return {
-                video: {
-                    facingMode: { ideal: "environment" },
-                    width: { ideal: 3840 },
-                    height: { ideal: 2160 },
-                    advanced: [{ focusMode: "continuous" }],
-                },
-                audio: false,
+            const video = {
+                width: { ideal: 3840 },
+                height: { ideal: 2160 },
+                advanced: [{ focusMode: "continuous" }],
             };
+            if (this.deviceId) video.deviceId = { exact: this.deviceId };
+            else video.facingMode = { ideal: "environment" };
+            return { video, audio: false };
+        },
+
+        // Video input devices, for the in-panel camera picker (labels are available
+        // once camera permission has been granted).
+        listCameras: async function () {
+            try {
+                const devs = await navigator.mediaDevices.enumerateDevices();
+                return devs.filter(d => d.kind === "videoinput")
+                    .map((d, i) => ({ id: d.deviceId, label: d.label || ("Camera " + (i + 1)) }));
+            } catch {
+                return [];
+            }
+        },
+
+        // Tells Blazor the negotiated capture resolution (shown in the panel so a
+        // wrong device/mode is visible instead of silently degrading decoding).
+        notifyCameraReady: function (dotnetRef, video) {
+            try { dotnetRef.invokeMethodAsync("OnCameraReady", video.videoWidth, video.videoHeight); } catch { /* UI-only */ }
         },
 
         // Acquires the camera onto the video element. Returns null on success (or when
@@ -143,7 +166,15 @@ window.calTracker = {
             try {
                 stream = await navigator.mediaDevices.getUserMedia(this.cameraConstraints());
             } catch (err) {
-                return this.cameraError(err);
+                if (this.deviceId) {
+                    // The remembered camera is gone (unplugged, id rotated): fall
+                    // back to the default device instead of failing the scan.
+                    this.deviceId = null;
+                    try { stream = await navigator.mediaDevices.getUserMedia(this.cameraConstraints()); }
+                    catch (err2) { return this.cameraError(err2); }
+                } else {
+                    return this.cameraError(err);
+                }
             }
             if (session !== this.session) {
                 // Cancelled while the permission prompt / warm-up was pending.
@@ -185,6 +216,7 @@ window.calTracker = {
         runNative: async function (session, video, detector, dotnetRef) {
             const err = await this.openCamera(session, video);
             if (err !== null || session !== this.session) return err;
+            this.notifyCameraReady(dotnetRef, video);
 
             const scan = async () => {
                 if (session !== this.session) return;
@@ -214,6 +246,8 @@ window.calTracker = {
 
             const err = await this.openCamera(session, video);
             if (err !== null || session !== this.session) return err;
+            this.notifyCameraReady(dotnetRef, video);
+            this.loadLocator();
 
             const frame = document.createElement("canvas");
             const ctx = frame.getContext("2d", { willReadFrequently: true });
@@ -300,6 +334,7 @@ window.calTracker = {
                         frame.height = h;
                         ctx.drawImage(video, 0, 0);
                         feedWave(ctx, w, h);
+                        this.updateBox(video, ctx, w, h);
                         const image = ctx.getImageData(0, 0, w, h);
                         decode: for (const red of [false, true]) {
                             if (red) {
@@ -324,6 +359,50 @@ window.calTracker = {
             };
             scan();
             return null;
+        },
+
+        // The decoder module doubles as the barcode LOCATOR; on the main thread it
+        // powers the orange found-a-barcode box (locate() itself costs ~2ms/frame).
+        loadLocator: function () {
+            if (window.UpcWaveform || this.locLoading) return;
+            this.locLoading = true;
+            const s = document.createElement("script");
+            s.src = "js/upc-waveform.js";
+            s.onerror = () => { this.locLoading = false; };
+            document.head.appendChild(s);
+        },
+
+        // Live visual feedback: outline the located barcode area over the preview,
+        // independent of (much slower) decoding — the user can tell "it sees the
+        // code" from "it can't read it yet" and adjust distance instead of guessing.
+        updateBox: function (video, ctx2d, w, h) {
+            const U = window.UpcWaveform;
+            const box = video && video.parentElement ? video.parentElement.querySelector(".scan-box") : null;
+            if (!U || !box) return;
+            let cands = null;
+            try {
+                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
+                const y0 = (h - bandH) >> 1;
+                const band = ctx2d.getImageData(0, y0, w, bandH);
+                cands = U.locate(band, 0, band.height);
+                if (cands && cands.length) {
+                    const c = cands[0];
+                    // Map capture coords onto the displayed element (object-fit: cover).
+                    const dispW = video.clientWidth, dispH = video.clientHeight;
+                    if (dispW > 0 && dispH > 0) {
+                        const scale = Math.max(dispW / w, dispH / h);
+                        const offX = (dispW - w * scale) / 2, offY = (dispH - h * scale) / 2;
+                        box.style.left = (c.xl * scale + offX) + "px";
+                        box.style.width = ((c.xr - c.xl) * scale) + "px";
+                        box.style.top = (y0 * scale + offY) + "px";
+                        box.style.height = (bandH * scale) + "px";
+                        box.classList.remove("hidden");
+                        this.boxSeenAt = Date.now();
+                    }
+                }
+            } catch { /* overlay is best-effort */ }
+            // Linger briefly so the box doesn't flicker on borderline frames.
+            if ((!cands || !cands.length) && Date.now() - this.boxSeenAt > 600) box.classList.add("hidden");
         },
 
         loadWasmReader: function () {
