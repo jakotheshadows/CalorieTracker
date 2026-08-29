@@ -60,7 +60,7 @@ const CASES = [
 for (const [name, o] of CASES) {
     console.log(`\n=== ${name} truth=${o.digits} trueX0=${o.xoff} trueMw=${o.mw} ===`);
     const img = synthBand(o);
-    const loc = U.locate(img, 0, img.height);
+    const loc = (U.locate(img, 0, img.height) || [null])[0]; // locate now returns ranked candidates
     console.log('locate:', loc ? `xl=${loc.xl} xr=${loc.xr} mwEst=${loc.mwEst.toFixed(2)}` : 'null',
         ` (true extent ${o.xoff}..${o.xoff + 95 * o.mw})`);
     if (!loc) continue;

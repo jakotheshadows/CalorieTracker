@@ -10,13 +10,19 @@ soft edges, exactly what binarizers can't read and this model can.
 
 ## How it works
 
-- `locate()` finds the code in the band (row-averaged gradient energy, fill-fraction
-  gate so codeless frames refuse in microseconds).
+- `locate()` finds the code in the band with TWO candidate generators and returns up
+  to 3 ranked extents: edge-energy runs (precise when the code is sharp) and
+  brightness-crossing chains (a defocused code has weaker gradients than sharp
+  background clutter — measured on a real frame where the energy winner was an
+  office chair — but nothing else oscillates ~24-60 times about its local mean).
+  Both are filtered by crossing count, so codeless frames refuse in microseconds.
 - `extractProfile()` averages the band into sub-pixel profiles (red channel — colored
   inks stay dark), rescaled so any code lands at ~1.2 px/module, normalized against a
   **linear white baseline anchored in the quiet zones** (a rolling local max dips over
   ink-dense digit runs and biases decoding toward sparser wrong digits — measured),
-  with the illumination ramp divided out.
+  with the illumination ramp divided out. Anchor ranges straddle the located edges
+  with a 93rd-percentile white estimate, so moderate extent error or dark clutter in
+  an anchor range cannot poison the baseline.
 - The printed code is modeled as bars + ink spread convolved with a **Gaussian** edge
   response on a curved module grid (quadratic + cubic). Per-segment amplitude fits are
   **clamped to the frame's global ink amplitude** so wrong templates can't amplify
@@ -36,10 +42,11 @@ soft edges, exactly what binarizers can't read and this model can.
     truth),
   - runner-up ratio <= 0.85,
   - **cousin margin**: every one-bar-shift substitution of the winner is scored
-    (checksum-free); if any comes within 10%, the frame doesn't determine those
-    digits and the decode is refused. This is what makes confident misreads not ship:
-    in the synthetic suite the model's best guess is wrong on the two hardest frames,
-    and this gate refuses both.
+    (checksum-free); if any comes within 8%, the frame doesn't determine those
+    digits and the decode is refused (misreads measure <= 0.99 — the confusion fits
+    BETTER; honest decodes measure >= 1.09). This is what makes confident misreads
+    not ship: in the synthetic suite the model's best guess is wrong on the two
+    hardest frames, and this gate refuses both.
 
 The live scanner (`app.js` scanner.runWasm) feeds the worker the scan-line band
 whenever the worker is idle; results join zxing's double-read confirmation pool, so

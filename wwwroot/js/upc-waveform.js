@@ -49,6 +49,11 @@
             }
             out.push(cs);
         }
+        // 1 and 7 differ by two NON-adjacent flips, so the shift rule misses them —
+        // but it is the classic blur confusion and digit 1's only rival; without it
+        // every '1' in a winner would go entirely uncertified by this sweep.
+        out[1].push(7);
+        out[7].push(1);
         return out;
     })();
 
@@ -218,7 +223,7 @@
             for (const [key, deltas] of moves) {
                 for (const d of deltas) {
                     const t = { ...cur, [key]: cur[key] + d };
-                    if (t.sigmaM < 0.4 || t.sigmaM > 2.0 || t.e < 0 || t.e > 0.4 || t.mw < 0.8 || t.mw > 1.6) continue;
+                    if (t.sigmaM < 0.4 || t.sigmaM > 2.6 || t.e < 0 || t.e > 0.4 || t.mw < 0.8 || t.mw > 1.6) continue;
                     const c = costFn(t);
                     if (c < curCost) { cur = t; curCost = c; improved = true; }
                 }
@@ -344,6 +349,7 @@
                             if (isFinite(c)) shortlist.push({ ...p, gc: c });
                         }
         if (shortlist.length === 0) return null;
+        if (o.deadline && Date.now() >= o.deadline) return null;
         shortlist.sort((u, v) => u.gc - v.gc);
 
         // Re-rank the guard survivors by "free-digit fit" (see freeDigitFit above):
@@ -396,6 +402,7 @@
 
         const emGrids = [];
         for (const seed of stratified.slice(0, o.grids || 8)) {
+            if (o.deadline && Date.now() >= o.deadline) break;
             // Physics pre-fit on the known structure (guards + quiet zones), so the
             // first digit table already uses the frame's real blur/ink-spread instead
             // of the seed's coarse guess — with heavy defocus the guess mis-ranks
@@ -459,6 +466,7 @@
         const pool = new Map();
         const seedPool = [];
         for (const prof of profiles) {
+            if (o.deadline && Date.now() >= o.deadline && pool.size > 0) break;
             const gen = decodeProfile(prof, o);
             if (!gen) continue;
             for (const [digits, seed] of gen.candMap) if (!pool.has(digits)) pool.set(digits, seed);
@@ -495,7 +503,8 @@
             ['r', [-0.000003, 0.000003]],
         ];
         let sweepBest = null;
-        for (const sig of [0.5, 0.65, 0.8, 0.95, 1.1, 1.3, 1.55, 1.8]) {
+        for (const sig of [0.5, 0.65, 0.8, 0.95, 1.1, 1.3, 1.55, 1.8, 2.1, 2.4]) {
+            if (o.deadline && Date.now() >= o.deadline && sweepBest) break;
             let cur = { ...seed0, sigmaM: sig, e: 0.1 };
             let curCost = physCost1(cur);
             for (let pass = 0; pass < 3; pass++) {
@@ -519,7 +528,7 @@
         let amp2 = 0;
         for (const prof of profiles) amp2 += (prof.amp || 1) * (prof.amp || 1);
         const fitNorm = fitted.cost / amp2;
-        const clampS = (s) => Math.max(0.4, Math.min(2.0, s));
+        const clampS = (s) => Math.max(0.4, Math.min(2.6, s));
         const PHYS = [
             { sigmaM: clampS(fitted.sigmaM * 0.75), e: fitted.e },
             { sigmaM: clampS(fitted.sigmaM), e: fitted.e },
@@ -564,6 +573,7 @@
         for (const digits of ranked) {
             const s = jointScore(digits);
             if (!best || s < jointOf.get(best)) best = digits;
+            if (o.deadline && Date.now() >= o.deadline) break;
         }
 
         // Hill-climb repairs: single and adjacent-pair substitutions (check digit
@@ -671,14 +681,20 @@
             for (let p = 0; p < 12; p++)
                 for (const cd of COUSINS[+top[0][p]]) {
                     const alt = top[0].slice(0, p) + cd + top[0].slice(p + 1);
-                    const r = jointScore(alt) / top[1];
+                    const cs = jointScore(alt);
+                    // Guard the top[1]=0 perfect-fit edge: a cousin also at 0 means
+                    // indistinguishable (refuse); any positive cousin cost means
+                    // infinitely separated.
+                    const r = top[1] > 0 ? cs / top[1] : (cs > 0 ? Infinity : 0);
                     if (r < cousinRatio) cousinRatio = r;
                 }
 
         const out = {
             digits: top[0],
             cost: top[1],
-            ratio: second ? top[1] / second[1] : 0,
+            // No measured runner-up must fail CLOSED (ratio 1 = maximally unsure),
+            // not open: "no competition found" is degeneracy, not confidence.
+            ratio: second ? top[1] / second[1] : 1,
             cousinRatio,
             fitNorm,
             nCands: pool.size,
@@ -734,9 +750,11 @@
         const ranges = anchors
             ? anchors.map(([a, b]) => [toIdx(a), Math.max(toIdx(a) + 4, toIdx(b))])
             : [[0, endN], [n - endN, n]];
+        // High percentile: an anchor range may be mostly bars or dark clutter when
+        // the located extent errs — any white minority must still set the baseline.
         const whiteOf = ([from, to]) => {
             const seg = [...prof.slice(from, to)].sort((a, b) => a - b);
-            return seg[Math.floor(seg.length * 0.8)];
+            return seg[Math.floor(seg.length * 0.93)];
         };
         const wL = whiteOf(ranges[0]), wR = whiteOf(ranges[1]);
         const cL = (ranges[0][0] + ranges[0][1]) / 2, cR = (ranges[1][0] + ranges[1][1]) / 2;
@@ -791,108 +809,218 @@
         }
         const rows = y2 - y1;
         for (let x = 0; x < W; x++) v[x] /= rows;
-        // Row-averaged gradient: real bars survive the averaging, noise does not.
-        const g = new Float64Array(W);
-        for (let x = 1; x < W - 1; x++) g[x] = Math.abs(v[x + 1] - v[x - 1]);
-        // Rolling-sum smooth (window ~31 px) -> per-x edge energy.
-        const half = 15;
-        const e = new Float64Array(W);
-        let acc = 0;
-        for (let x = 0; x < Math.min(W, 2 * half + 1); x++) acc += g[x];
-        for (let x = half; x < W - half - 1; x++) {
-            e[x] = acc / (2 * half + 1);
-            acc += g[x + half + 1] - g[x - half];
-        }
-        let mx = 0;
-        for (let x = 0; x < W; x++) if (e[x] > mx) mx = e[x];
-        if (mx < 4) return null; // nothing edge-dense in this band
-        // Longest run above threshold, tolerating gaps (wide bars are locally flat).
-        const thr = mx * 0.3, maxGap = 24;
-        let bestL = -1, bestR = -1, curL = -1, gap = 0;
+
+        // A barcode's signature is OSCILLATION: dozens of bar/space alternations of
+        // the row-averaged brightness about its local mean. Edge ENERGY cannot find a
+        // defocused code — a sharp background object (door frame, chair mesh) carries
+        // far more of it than blurred bars, which is exactly how a real close-held
+        // frame failed. So: collect amplitude-hysteresis crossing positions across
+        // the whole band, then cluster them into dense chains — each chain is a
+        // candidate extent. Isolated edges give a handful of crossings; small clutter
+        // clusters give chains too narrow to be a code; blank regions give none.
+        const halfS = 20;
+        const xs = [];
+        // Seed the rolling window with the state for x = -1, i.e. v[0..halfS-1]:
+        // the first iteration adds v[halfS] itself. (Seeding through halfS double-
+        // counted that sample FOREVER — a dark v[halfS] biased every local mean in
+        // the band by more than the hysteresis threshold.)
+        let acc = 0, n = 0;
+        for (let x = 0; x < Math.min(W, halfS); x++) { acc += v[x]; n++; }
+        let state = 0;
         for (let x = 0; x < W; x++) {
-            if (e[x] >= thr) {
-                if (curL < 0) curL = x;
-                gap = 0;
-            } else if (curL >= 0 && ++gap > maxGap) {
-                const r = x - gap;
-                if (r - curL > bestR - bestL) { bestL = curL; bestR = r; }
-                curL = -1;
+            const lo = x - halfS - 1, hi = x + halfS;
+            if (lo >= 0) { acc -= v[lo]; n--; }
+            if (hi < W) { acc += v[hi]; n++; }
+            const d = v[x] - acc / n;
+            if (d > 1.5) { if (state < 0) xs.push(x); state = 1; }
+            else if (d < -1.5) { if (state > 0) xs.push(x); state = -1; }
+        }
+        if (xs.length < 16) return null;
+        const crossStats = (xl, xr) => {
+            let c = 0, first = -1, last = -1;
+            for (const x of xs) if (x >= xl && x <= xr) { c++; if (first < 0) first = x; last = x; }
+            return { c, first, last };
+        };
+        // Module width from the CROSSING SPAN, not the padded extent: the outermost
+        // crossings sit at roughly modules 1 and 94, so span/92 is ~unbiased, while
+        // extent/95 runs 10-25% high (blur tails, margins) — enough to sneak
+        // sub-floor codes past the >=2 px/module ambiguity gate (measured).
+        const mwOf = (st) => (st.last - st.first) / 92;
+
+        const cands = [];
+
+        // Generator 1 — edge-energy run (precise when the code is SHARP): the classic
+        // strongest-run detector. When the code is defocused, a sharp background
+        // object wins this run instead — but then it fails the crossings filter below
+        // and simply drops out, costing nothing.
+        {
+            const g = new Float64Array(W);
+            for (let x = 1; x < W - 1; x++) g[x] = Math.abs(v[x + 1] - v[x - 1]);
+            const half = 15;
+            const e = new Float64Array(W);
+            let acc2 = 0;
+            for (let x = 0; x < Math.min(W, 2 * half + 1); x++) acc2 += g[x];
+            for (let x = half; x < W - half - 1; x++) {
+                e[x] = acc2 / (2 * half + 1);
+                acc2 += g[x + half + 1] - g[x - half];
+            }
+            let mx = 0;
+            for (let x = 0; x < W; x++) if (e[x] > mx) mx = e[x];
+            if (mx >= 4) {
+                const thr = mx * 0.3, maxGap = 24;
+                let bestL = -1, bestR = -1, curL = -1, gap = 0;
+                for (let x = 0; x < W; x++) {
+                    if (e[x] >= thr) {
+                        if (curL < 0) curL = x;
+                        gap = 0;
+                    } else if (curL >= 0 && ++gap > maxGap) {
+                        const r = x - gap;
+                        if (r - curL > bestR - bestL) { bestL = curL; bestR = r; }
+                        curL = -1;
+                    }
+                }
+                if (curL >= 0 && (W - 1 - gap) - curL > bestR - bestL) { bestL = curL; bestR = W - 1 - gap; }
+                if (bestL >= 0) {
+                    // Hysteresis extension: blur pushes parts of the code (wide-space
+                    // digit runs) under the strong threshold.
+                    const lowThr = mx * 0.1, lowGap = 64;
+                    for (let x = bestL - 1, g2 = 0, last = bestL; ; x--) {
+                        if (x < 0 || ++g2 > lowGap) { bestL = last; break; }
+                        if (e[x] >= lowThr) { last = x; g2 = 0; }
+                    }
+                    for (let x = bestR + 1, g2 = 0, last = bestR; ; x++) {
+                        if (x >= W || ++g2 > lowGap) { bestR = last; break; }
+                        if (e[x] >= lowThr) { last = x; g2 = 0; }
+                    }
+                    const width = bestR - bestL + 1;
+                    const st = crossStats(bestL, bestR);
+                    if (width >= 140 && width <= 1600 && st.c >= 16)
+                        cands.push({ xl: bestL, xr: bestR, mwEst: mwOf(st), crossings: st.c });
+                }
             }
         }
-        if (curL >= 0 && (W - 1 - gap) - curL > bestR - bestL) { bestL = curL; bestR = W - 1 - gap; }
-        if (bestL < 0) return null;
-        // Fill fraction of the strong run BEFORE hysteresis extension: a barcode's
-        // edge energy is near-continuous across its extent, while text/clutter runs
-        // are patchy. Lets callers skip expensive decoding on codeless frames.
-        let strong = 0;
-        for (let x = bestL; x <= bestR; x++) if (e[x] >= thr) strong++;
-        const fill = strong / Math.max(1, bestR - bestL + 1);
-        // Hysteresis: heavy blur can push half the code (wide-space digit runs) under
-        // the strong threshold, splitting it off the core run. Extend outward at a low
-        // threshold with a generous gap so the full code survives.
-        const lowThr = mx * 0.1, lowGap = 64;
-        for (let x = bestL - 1, g2 = 0, last = bestL; ; x--) {
-            if (x < 0 || ++g2 > lowGap) { bestL = last; break; }
-            if (e[x] >= lowThr) { last = x; g2 = 0; }
+
+        // Generator 2 — crossing chains (finds DEFOCUSED codes that generator 1
+        // cannot): split the crossing sequence into chains wherever the spacing
+        // jumps well past the median — separate objects sit far apart, bars do not.
+        {
+            const spacings = [];
+            for (let i = 1; i < xs.length; i++) spacings.push(xs[i] - xs[i - 1]);
+            const median = [...spacings].sort((a, b) => a - b)[Math.floor(spacings.length / 2)];
+            const splitAt = Math.max(50, 3 * median);
+            const chains = [];
+            let start = 0;
+            for (let i = 1; i <= xs.length; i++) {
+                if (i === xs.length || xs[i] - xs[i - 1] > splitAt) {
+                    chains.push([start, i - 1]);
+                    start = i;
+                }
+            }
+            const chainCands = [];
+            for (const [a, b] of chains) {
+                const count = b - a + 1;
+                if (count < 16) continue; // a UPC has ~59 runs; severe defocus keeps ~24
+                const wch = xs[b] - xs[a];
+                const m = wch * 0.05 + 5; // outer bars extend slightly past their crossings
+                const xl = Math.max(0, Math.round(xs[a] - m));
+                const xr = Math.min(W - 1, Math.round(xs[b] + m));
+                const width = xr - xl + 1;
+                if (width < 140 || width > 1600) continue;
+                chainCands.push({ xl, xr, mwEst: wch / 92, crossings: count });
+            }
+            chainCands.sort((u, w) => w.crossings - u.crossings);
+            cands.push(...chainCands);
         }
-        for (let x = bestR + 1, g2 = 0, last = bestR; ; x++) {
-            if (x >= W || ++g2 > lowGap) { bestR = last; break; }
-            if (e[x] >= lowThr) { last = x; g2 = 0; }
+
+        // The generators usually agree on a code-bearing region within a few px;
+        // without dedup the same extent is decoded twice (seconds each). On overlap
+        // keep the higher crossing count; ties keep the earlier (generator-1) entry.
+        const merged = [];
+        for (const c of cands) {
+            const i = merged.findIndex(mc => {
+                const ov = Math.min(mc.xr, c.xr) - Math.max(mc.xl, c.xl);
+                return ov > 0.6 * Math.min(mc.xr - mc.xl, c.xr - c.xl);
+            });
+            if (i < 0) merged.push(c);
+            else if (c.crossings > merged[i].crossings) merged[i] = c;
         }
-        const mwEst = (bestR - bestL) / 95;
-        return { xl: bestL, xr: bestR, mwEst, fill };
+        return merged.length ? merged.slice(0, 3) : null;
     }
 
     // Live entry point: locate + rescale + joint-decode one horizontal band.
-    // Tries both orientations (a hand-held code is upside down half the time).
-    // Returns {digits, ratio, mwPx} or null. Refuses below minMwPx — see header.
+    // Tries the top locate() candidates (a defocused code can rank behind sharp
+    // background clutter) and both orientations (a hand-held code is upside down
+    // half the time). Returns {digits, ratio, mwPx} or null. Refuses below minMwPx.
     function scanBand(img, y1, y2, opts) {
         const o = opts || {};
-        const minMw = o.minMwPx === undefined ? 2.0 : o.minMwPx;
-        const loc = locate(img, y1, y2);
-        if (!loc || loc.mwEst < minMw || loc.mwEst > 16) return null;
-        // Printed bars give a near-solid strong-edge run (measured 0.95+); text and
-        // clutter are patchier. Refusing here costs microseconds, decoding costs seconds.
-        if (loc.fill < (o.minFill === undefined ? 0.92 : o.minFill)) return null;
+        // mwEst is the ~unbiased crossing-span estimate; 2.05 buys a small buffer
+        // over the 2.0 px/module single-frame ambiguity floor (see file header).
+        const minMw = o.minMwPx === undefined ? 2.05 : o.minMwPx;
+        const cands = locate(img, y1, y2);
+        if (!cands) return null;
         const deadline = o.budgetMs ? Date.now() + o.budgetMs : Infinity;
-        const scale = loc.mwEst / 1.2;
-        const margin = 14 * loc.mwEst;
-        const xa = Math.max(0, loc.xl - margin);
-        const xb = Math.min(img.width, loc.xr + margin);
-        // Three overlapping sub-bands: decodeJoint's cross-band agreement is the
-        // within-frame defense against a wrong code fitting one noisy band.
-        const H = y2 - y1;
-        const bands = H >= 24
-            ? [[y1, y1 + (H * 2 / 3) | 0], [y1 + (H / 6) | 0, y2 - (H / 6) | 0], [y2 - (H * 2 / 3) | 0, y2]]
-            : [[y1, y2]];
-        // Quiet-zone anchors for the white baseline: just inside the located extent's
-        // flanks (the mandated quiet zones), clear of both the code's blur tail and
-        // whatever print sits further out.
-        const anchors = [
-            [Math.max(xa, loc.xl - 10 * loc.mwEst), loc.xl - 2 * loc.mwEst],
-            [loc.xr + 2 * loc.mwEst, Math.min(xb, loc.xr + 10 * loc.mwEst)],
-        ];
-        const profiles = bands.map(([a, b]) => extractProfile(img, xa, xb, a, b, 0, scale, anchors));
-        // Hand the located extent (in profile coordinates) to candidate generation;
-        // its own variance envelope splits heavily-blurred codes.
-        const env = { xl: (loc.xl - xa) / scale, xr: (loc.xr - xa) / scale };
-        const envRev = { xl: (xb - loc.xr) / scale, xr: (xb - loc.xl) / scale };
-        const jointOpts = { grids: o.grids || 6, verify: o.verify, repairIters: 6, env, deadline, debug: o.debug, mustScore: o.mustScore };
         const maxRatio = o.maxRatio === undefined ? 0.85 : o.maxRatio;
-        const fwd = decodeJoint(profiles, jointOpts);
-        // Only pay for the reversed pass when forward isn't decisively clean.
-        let better = fwd;
-        if ((!fwd || fwd.ratio > maxRatio * 0.85) && Date.now() < deadline) {
-            const rev = decodeJoint(profiles.map(reverseProfile), { ...jointOpts, env: envRev });
-            better = !fwd ? rev : !rev ? fwd : (fwd.cost <= rev.cost ? fwd : rev);
+        // Misreads measure cousin <= 0.99 (a confusion fits BETTER than the winner);
+        // legitimate decodes measure >= 1.09. 1.08 splits with margin on both sides.
+        const minCousin = o.minCousin === undefined ? 1.08 : o.minCousin;
+        let lastRefused = null;
+
+        for (const loc of cands) {
+            if (loc.mwEst < minMw || loc.mwEst > 16) continue;
+            const scale = loc.mwEst / 1.2;
+            const margin = 14 * loc.mwEst;
+            const xa = Math.max(0, loc.xl - margin);
+            const xb = Math.min(img.width, loc.xr + margin);
+            // Three overlapping sub-bands: decodeJoint's cross-band agreement is the
+            // within-frame defense against a wrong code fitting one noisy band.
+            const H = y2 - y1;
+            const bands = H >= 24
+                ? [[y1, y1 + (H * 2 / 3) | 0], [y1 + (H / 6) | 0, y2 - (H / 6) | 0], [y2 - (H * 2 / 3) | 0, y2]]
+                : [[y1, y2]];
+            // Quiet-zone anchors for the white baseline: ranges STRADDLING the located
+            // edges. The mandated quiet zone sits just outside the true edge, but the
+            // estimate can err a few modules either way (and print/clutter may sit
+            // further out), so a wide straddle + the 93rd-percentile white estimate
+            // (which tolerates a mostly-dark range) stays anchored on quiet-zone white
+            // regardless of moderate extent error.
+            const anchors = [
+                [Math.max(xa, loc.xl - 8 * loc.mwEst), loc.xl + 5 * loc.mwEst],
+                [loc.xr - 5 * loc.mwEst, Math.min(xb, loc.xr + 8 * loc.mwEst)],
+            ];
+            const profiles = bands.map(([a, b]) => extractProfile(img, xa, xb, a, b, 0, scale, anchors));
+            // Hand the located extent (in profile coordinates) to candidate generation;
+            // its own variance envelope splits heavily-blurred codes.
+            const env = { xl: (loc.xl - xa) / scale, xr: (loc.xr - xa) / scale };
+            const envRev = { xl: (xb - loc.xr) / scale, xr: (xb - loc.xl) / scale };
+            const jointOpts = { grids: o.grids || 6, verify: o.verify, repairIters: 6, env, deadline, debug: o.debug, mustScore: o.mustScore };
+            const fwd = decodeJoint(profiles, jointOpts);
+            // Only pay for the reversed pass when forward isn't decisively clean.
+            let better = fwd, other = null;
+            if ((!fwd || fwd.ratio > maxRatio * 0.85) && Date.now() < deadline) {
+                const rev = decodeJoint(profiles.map(reverseProfile), { ...jointOpts, env: envRev });
+                better = !fwd ? rev : !rev ? fwd : (fwd.cost <= rev.cost ? fwd : rev);
+                other = better === fwd ? rev : fwd;
+            }
+            // The losing orientation is a runner-up too: a wrong winner can have a
+            // comfortable within-pool ratio while the other orientation's best sits
+            // within a few percent of its cost. Fold it into the ratio gate.
+            let effRatio = better ? better.ratio : 1;
+            if (better && other && other.digits !== better.digits)
+                effRatio = Math.max(effRatio, better.cost / other.cost);
+            if (better && effRatio <= maxRatio && better.cousinRatio >= minCousin) {
+                const out = { digits: better.digits, ratio: effRatio, cousinRatio: better.cousinRatio, mwPx: loc.mwEst };
+                if (o.debug) { out.top = better.top; out.inPool = better.inPool; out.phys = better.phys; }
+                return out;
+            }
+            if (o.debug && better && !lastRefused) {
+                // Lab visibility: keep the first refused decode to surface if nothing
+                // is accepted — but keep trying later candidates exactly like live.
+                lastRefused = { digits: better.digits, ratio: effRatio, cousinRatio: better.cousinRatio, mwPx: loc.mwEst, refused: true };
+                lastRefused.top = better.top; lastRefused.inPool = better.inPool; lastRefused.phys = better.phys;
+            }
+            if (Date.now() >= deadline) break;
         }
-        if (!better) return null;
-        if (better.ratio > maxRatio) return null; // not decisively ahead of the runner-up
-        const minCousin = o.minCousin === undefined ? 1.1 : o.minCousin;
-        if (better.cousinRatio < minCousin) return null; // a visual confusion is too close
-        const out = { digits: better.digits, ratio: better.ratio, cousinRatio: better.cousinRatio, mwPx: loc.mwEst };
-        if (o.debug) { out.top = better.top; out.inPool = better.inPool; out.phys = better.phys; }
-        return out;
+        return lastRefused;
     }
 
     function selfTest() {

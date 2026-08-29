@@ -70,7 +70,7 @@ synthBand({ digits: '041196403824', mw: 8, xoff: 220, blurR: 8 });
 const o = { digits: '713733788632', mw: 4, xoff: 420, blurR: 5 };
 const img = synthBand(o);
 
-const loc = U.locate(img, 0, img.height);
+const loc = (U.locate(img, 0, img.height) || [null])[0]; // locate now returns ranked candidates
 console.log('locate:', `xl=${loc.xl} xr=${loc.xr} mwEst=${loc.mwEst.toFixed(2)} (true 420..800)`);
 const scale = loc.mwEst / 1.2;
 const margin = 14 * loc.mwEst;

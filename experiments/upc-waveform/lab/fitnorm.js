@@ -79,7 +79,7 @@ const CASES = [
 // decodes; for refused/failed cases call decodeJoint directly.
 for (const [name, o] of CASES) {
     const img = synthBand(o);
-    const loc = U.locate(img, 0, img.height);
+    const loc = (U.locate(img, 0, img.height) || [null])[0]; // locate now returns ranked candidates
     if (!loc) { console.log(`${name}: locate null`); continue; }
     const scale = loc.mwEst / 1.2;
     const margin = 14 * loc.mwEst;
@@ -94,5 +94,5 @@ for (const [name, o] of CASES) {
     const env = { xl: (loc.xl - xa) / scale, xr: (loc.xr - xa) / scale };
     const t0 = Date.now();
     const r = U.decodeJoint(profiles, { grids: 6, env, repairIters: 0, verify: 2 });
-    console.log(`${name}: mwEst=${loc.mwEst.toFixed(2)} fill=${loc.fill.toFixed(2)} fitNorm=${r ? r.fitNorm.toFixed(3) : 'n/a'} (${Date.now() - t0}ms)`);
+    console.log(`${name}: mwEst=${loc.mwEst.toFixed(2)} cross=${loc.crossings} fitNorm=${r ? r.fitNorm.toFixed(3) : 'n/a'} (${Date.now() - t0}ms)`);
 }

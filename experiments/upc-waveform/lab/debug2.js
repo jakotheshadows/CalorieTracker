@@ -53,7 +53,7 @@ function synthBand(o) {
 
 const o = { digits: '036000291452', mw: 6, xoff: 320, blurR: 5 };
 const img = synthBand(o);
-const loc = U.locate(img, 0, img.height);
+const loc = (U.locate(img, 0, img.height) || [null])[0]; // locate now returns ranked candidates
 console.log('locate:', loc ? `xl=${loc.xl} xr=${loc.xr} mwEst=${loc.mwEst.toFixed(2)}` : 'null',
     `(true 320..${320 + 95 * 6})`);
 if (loc) {

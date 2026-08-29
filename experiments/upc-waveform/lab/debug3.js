@@ -52,7 +52,7 @@ function synthBand(o) {
 
 const o = { digits: '036000291452', mw: 6, xoff: 320, blurR: 5 };
 const img = synthBand(o);
-const loc = U.locate(img, 0, img.height);
+const loc = (U.locate(img, 0, img.height) || [null])[0]; // locate now returns ranked candidates
 const scale = loc.mwEst / 1.2;
 const margin = 14 * loc.mwEst;
 const xa = Math.max(0, loc.xl - margin);

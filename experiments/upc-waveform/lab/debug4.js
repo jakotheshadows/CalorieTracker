@@ -78,7 +78,7 @@ const only = process.argv[2];
 for (const [name, o, truth] of CASES) {
     const img = synthBand(o);
     if (only && !name.startsWith(only)) continue;
-    const loc = U.locate(img, 0, img.height);
+    const loc = (U.locate(img, 0, img.height) || [null])[0]; // locate now returns ranked candidates
     console.log(`\n=== ${name} ===  locate:`, loc ? `xl=${loc.xl} xr=${loc.xr} mwEst=${loc.mwEst.toFixed(2)}` : 'null',
         `(true ${o.xoff}..${Math.round(o.xoff + 95 * o.mw)})`);
     const t0 = Date.now();

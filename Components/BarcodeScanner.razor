@@ -4,7 +4,7 @@
    manual number-entry fallback that works in every browser. *@
 <div class="scanner-panel">
     <div class="usda-search-row usda-status-row">
-        <span class="muted small">@(_error ?? "Hold the barcode near the red line and keep it steady — a close, slightly blurry code is fine.")</span>
+        <span class="muted small">@(_error ?? "Hold the barcode steady near the red line, as close as it stays reasonably sharp — if it looks very blurry, move it a little farther away.")</span>
         <span class="spacer"></span>
         @if (_error is null)
         {

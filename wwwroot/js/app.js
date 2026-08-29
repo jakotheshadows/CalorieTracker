@@ -246,7 +246,7 @@ window.calTracker = {
             // fitting decoder handles exactly that; it runs in a worker off-thread and
             // is fed the scan-line band whenever it's idle. Its own gates (>=2 px/module,
             // decisive-margin) plus the double-read rule guard against misreads.
-            let waveBusy = false, waveSeq = 0;
+            let waveBusy = false, waveSeq = 0, waveCooldownUntil = 0, waveNullStreak = 0;
             if (!this.waveWorker) {
                 try { this.waveWorker = new Worker("js/upc-worker.js"); } catch { /* optional */ }
             }
@@ -256,11 +256,30 @@ window.calTracker = {
                     waveBusy = false;
                     const { seq, result } = ev.data;
                     if (session !== this.session || seq !== waveSeq) return;
-                    if (result && result.digits) accept(result.digits);
+                    if (result && result.digits) {
+                        // A decisively certified read (far ahead of every rival AND
+                        // every visual confusion; observed misreads sit at ratio>=0.9,
+                        // cousin<=0.99) skips the double-read: a second worker pass
+                        // costs 10-15s and re-reads near-identical pixels, adding no
+                        // real independence. Borderline reads still need agreement.
+                        waveNullStreak = 0;
+                        if (result.ratio <= 0.7 && result.cousinRatio >= 1.25) {
+                            this.stop();
+                            dotnetRef.invokeMethodAsync("OnBarcodeDetected", result.digits);
+                            return;
+                        }
+                        accept(result.digits);
+                    } else {
+                        // Nothing decodable in view: don't grind the CPU re-analyzing
+                        // an unchanged codeless scene at full tilt; back off further
+                        // the longer nothing turns up.
+                        waveNullStreak++;
+                        waveCooldownUntil = Date.now() + Math.min(1500 * waveNullStreak, 6000);
+                    }
                 };
             }
             const feedWave = (ctx2d, w, h) => {
-                if (!wave || waveBusy) return;
+                if (!wave || waveBusy || Date.now() < waveCooldownUntil) return;
                 const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
                 const y0 = (h - bandH) >> 1;
                 const band = ctx2d.getImageData(0, y0, w, bandH);
