@@ -204,7 +204,17 @@ window.calTracker = {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
                 a.href = url;
-                a.download = "caltrack-frame-" + Date.now() + ".png";
+                // The pixels stay pristine (overlays would corrupt decoder tests on
+                // the frame), but the CURRENT detection state rides along in the
+                // filename so the box the app showed at capture time is known.
+                let tag = "";
+                const lc = this.lastChoice;
+                if (lc && Date.now() - (this.lastChoiceAt || 0) < 2000) {
+                    tag = "-box" + lc.xl + "x" + lc.xr + "y" + lc.by1 + "-" + lc.by2 +
+                        "s" + (lc.slope || 0).toFixed(2).replace("-", "n") +
+                        (lc.pre !== undefined && isFinite(lc.pre) ? "p" + lc.pre.toFixed(2) : "");
+                }
+                a.download = "caltrack-frame-" + Date.now() + tag + ".png";
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
@@ -477,6 +487,9 @@ window.calTracker = {
             if (this.detectCache.size > 40)
                 for (const [k, v] of this.detectCache) if (now - v.t > 4000) this.detectCache.delete(k);
             if (box) this.drawBox(video, box, choice, w, h);
+            // For saveFrame: what the box was showing at capture time.
+            this.lastChoice = choice;
+            this.lastChoiceAt = now;
             return choice;
         },
 
