@@ -8,6 +8,10 @@
 <div class="usda-panel">
     @if (!_hasKey)
     {
+        @if (_scannedCode is not null)
+        {
+            <div class="alert-ok">✅ Barcode read: <b>@_scannedCode</b> — but looking it up needs a USDA API key.</div>
+        }
         <p class="muted small">
             Nutrition lookup searches the USDA FoodData Central database and fills in calories,
             macros, and micros for you. It needs a free API key — about a minute to set up
@@ -31,6 +35,10 @@
             <span class="spacer"></span>
             <button class="btn" @onclick="CloseAsync">Close</button>
         </div>
+        @if (_scannedCode is not null)
+        {
+            <div class="alert-ok">✅ Barcode read: <b>@_scannedCode</b> — compare with the digits printed under the code.</div>
+        }
         @if (_error is not null)
         {
             <div class="alert-error">@_error</div>

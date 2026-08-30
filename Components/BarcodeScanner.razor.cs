@@ -14,6 +14,7 @@ public partial class BarcodeScanner
     private string? _error;
     private string _manualCode = "";
     private string? _cameraInfo;
+    private string? _status;
     private string? _selectedCameraId;
     private List<CameraDevice> _cameras = new();
     private DotNetObjectReference<BarcodeScanner>? _selfRef;
@@ -40,6 +41,23 @@ public partial class BarcodeScanner
     public Task OnBarcodeDetected(string code) => OnDetected.InvokeAsync(code);
 
     [JSInvokable]
+    public void OnScanStatus(string stage, int n)
+    {
+        // The deep decode runs for tens of seconds; without a live stage line,
+        // "working on it" and "seeing nothing" are indistinguishable to the user.
+        _status = stage switch
+        {
+            "locked" => n < 4
+                ? $"Barcode found — hold still… capturing frames ({n}/4)"
+                : $"Barcode found — {n} frames captured, hold still…",
+            "analyzing" => $"Reading… analyzing {n} frames. This can take ~30 s — keep the code in view.",
+            "noread" => "That pass wasn't certain enough — still trying. Adjust distance or angle slightly.",
+            _ => null, // "searching" falls back to the default guidance line
+        };
+        StateHasChanged();
+    }
+
+    [JSInvokable]
     public async Task OnCameraReady(int width, int height)
     {
         // Surface the negotiated capture resolution and the device list, so a wrong
@@ -56,6 +74,7 @@ public partial class BarcodeScanner
         _selectedCameraId = string.IsNullOrEmpty(id) ? null : id;
         await JS.InvokeVoidAsync("calTracker.storage.set", "caltrack-scanner-camera", _selectedCameraId ?? "");
         _cameraInfo = null;
+        _status = null; // the old session's "hold still/analyzing" must not outlive it
         _error = await JS.InvokeAsync<string?>("calTracker.scanner.start", _videoId, _selfRef, _selectedCameraId);
         StateHasChanged();
     }

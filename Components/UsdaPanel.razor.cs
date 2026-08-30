@@ -17,6 +17,7 @@ public partial class UsdaPanel
     private bool _busy;
     private int _searchSeq;
     private string? _lastQuery;
+    private string? _scannedCode;
     private string? _error;
     private string? _applied;
     private List<UsdaFood>? _results;
@@ -27,9 +28,10 @@ public partial class UsdaPanel
     protected override async Task OnInitializedAsync()
     {
         _hasKey = await Usda.GetApiKeyAsync() is not null;
-        if (!_hasKey) return;
+        // A scanned barcode goes through even without a key: LookupBarcodeAsync then
+        // just records the digits, so the read is shown instead of silently dropped.
         if (InitialBarcode is not null) await LookupBarcodeAsync(InitialBarcode);
-        else if (!string.IsNullOrWhiteSpace(Query)) await SearchAsync(Query);
+        else if (_hasKey && !string.IsNullOrWhiteSpace(Query)) await SearchAsync(Query);
     }
 
     /// <summary>Run a search. Called on open and by the parent (via @ref) on later button clicks.</summary>
@@ -40,6 +42,7 @@ public partial class UsdaPanel
         if (query.Length == 0)
         {
             _lastQuery = null;
+            _scannedCode = null;
             _results = null;
             _selected = null;
             _error = null;
@@ -51,6 +54,7 @@ public partial class UsdaPanel
         var seq = ++_searchSeq;
         _busy = true;
         _lastQuery = query;
+        _scannedCode = null;
         _error = null;
         _applied = null;
         _results = null;
@@ -66,7 +70,17 @@ public partial class UsdaPanel
     /// <summary>Look up a scanned/typed barcode and auto-apply the matching food at its label serving.</summary>
     public async Task LookupBarcodeAsync(string code)
     {
-        if (!_hasKey) return;
+        // Surface the decoded digits no matter what happens next — a working camera
+        // read must be visible even when the USDA lookup can't run or finds nothing.
+        // Below 8 digits nothing was really read (manual junk); the service rejects
+        // those too, and a "Barcode read" banner over its rejection would be a lie.
+        var digits = new string(code.Where(char.IsDigit).ToArray());
+        _scannedCode = digits.Length >= 8 ? digits : null;
+        if (!_hasKey)
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
         var seq = ++_searchSeq;
         _busy = true;
         _lastQuery = $"barcode {code}";

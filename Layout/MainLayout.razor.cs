@@ -30,6 +30,15 @@ public partial class MainLayout
         InvokeAsync(StateHasChanged);
     }
 
+    [JSInvokable]
+    public void OnUpdateFailed()
+    {
+        // The clicked update's worker died installing: bring the buttons back so
+        // the user can retry, instead of a "reloading in a moment" that never comes.
+        _updating = false;
+        InvokeAsync(StateHasChanged);
+    }
+
     private async Task ApplyUpdateAsync()
     {
         _updating = true;

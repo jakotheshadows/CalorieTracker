@@ -12,6 +12,8 @@ window.calTracker = {
         reg: null,
         dotnetRef: null,
         refreshing: false,
+        pendingReload: false,
+        controllerChanged: false,
 
         init: async function (dotnetRef) {
             if (!("serviceWorker" in navigator)) return;
@@ -31,9 +33,17 @@ window.calTracker = {
                 });
             });
 
-            // When the new worker takes over, reload once so the page runs the new assets.
+            // Reload once when the new worker takes over — but ONLY if this tab asked
+            // for it (applyUpdate). controllerchange also fires on activations we did
+            // not initiate — DevTools' "Update on reload" force-activates on every
+            // load, which made an unconditional reload here loop forever (and killed
+            // in-progress barcode scans). An external activation is noted instead, so
+            // a later "Update now" click can finish the job with a reload.
             navigator.serviceWorker.addEventListener("controllerchange", () => {
-                if (this.refreshing) return;
+                if (!this.pendingReload || this.refreshing) {
+                    this.controllerChanged = true;
+                    return;
+                }
                 this.refreshing = true;
                 window.location.reload();
             });
@@ -63,16 +73,35 @@ window.calTracker = {
         // Returns true if a force-update was started (page will reload via controllerchange).
         applyUpdate: function () {
             if (!this.reg) return false;
+            // Armed only at the moment the skip is actually sent: a stale arm on a
+            // worker that never activates would re-enable the unconditional external
+            // reload the pendingReload gate exists to prevent.
+            const skip = (w) => { this.pendingReload = true; w.postMessage("SKIP_WAITING"); };
             if (this.reg.waiting) {
-                this.reg.waiting.postMessage("SKIP_WAITING");
+                skip(this.reg.waiting);
                 return true;
             }
             // New worker still downloading: queue the skip for when it finishes installing.
             const incoming = this.reg.installing;
             if (incoming) {
                 incoming.addEventListener("statechange", () => {
-                    if (this.reg.waiting) this.reg.waiting.postMessage("SKIP_WAITING");
+                    if (incoming.state === "redundant") {
+                        // Install failed (bad network, mid-deploy hash mismatch):
+                        // disarm and put the banner's buttons back for a retry.
+                        this.pendingReload = false;
+                        if (this.dotnetRef) this.dotnetRef.invokeMethodAsync("OnUpdateFailed");
+                    } else if (this.reg.waiting) {
+                        skip(this.reg.waiting);
+                    }
                 });
+                return true;
+            }
+            // Nothing waiting or installing, but the controller changed under us: the
+            // update was already activated elsewhere (another tab, DevTools) while this
+            // tab kept running the old assets — finish it with the reload ourselves.
+            if (this.controllerChanged) {
+                this.refreshing = true;
+                window.location.reload();
                 return true;
             }
             return false;
@@ -291,6 +320,16 @@ window.calTracker = {
             // is fed the scan-line band whenever it's idle. Its own gates (>=2 px/module,
             // decisive-margin) plus the double-read rule guard against misreads.
             let waveBusy = false, waveSeq = 0, waveCooldownUntil = 0, waveNullStreak = 0;
+            // Live status line: the deep decode takes tens of seconds, so without
+            // feedback "working on it" and "seeing nothing" look identical. Stages
+            // are pushed to Blazor only when they change.
+            let lastStatusKey = "", noreadUntil = 0, analyzingN = 0, waveDead = false;
+            const status = (stage, n) => {
+                const key = stage + ":" + n;
+                if (key === lastStatusKey || session !== this.session) return;
+                lastStatusKey = key;
+                try { dotnetRef.invokeMethodAsync("OnScanStatus", stage, n).catch(() => { }); } catch { /* teardown race */ }
+            };
             if (!this.waveWorker) {
                 try { this.waveWorker = new Worker("js/upc-worker.js"); } catch { /* optional */ }
             }
@@ -312,8 +351,16 @@ window.calTracker = {
                         // the longer nothing turns up.
                         waveNullStreak++;
                         waveCooldownUntil = Date.now() + Math.min(1500 * waveNullStreak, 6000);
+                        // The "adjust distance/angle" hint covers exactly the deliberate
+                        // idle window — flipping back to "hold still" mid-cooldown would
+                        // coach the user to freeze on the framing that just failed.
+                        noreadUntil = waveCooldownUntil;
                     }
                 };
+                // A worker that can't load (stale SW cache, deploy mismatch) or dies
+                // still fires 'error'; without this, waveBusy would stick and the
+                // status line would promise an analysis that will never happen.
+                wave.onerror = () => { waveDead = true; waveBusy = false; };
             }
             // Stillness gate: hand motion double-exposes the bars (measured ~8px
             // ghosting on a real frame — no blur model fits a double image), and the
@@ -348,7 +395,7 @@ window.calTracker = {
             // sigma/mw ~1.5 is ambiguous, N frames under different noise are not.
             let burstBuf = [];
             const feedWave = (image, w, h, choice) => {
-                if (!wave || !choice) return;
+                if (!wave || waveDead || !choice) return;
                 const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
                 const y0 = Math.max(0, Math.min(h - bandH, Math.round((choice.by1 + choice.by2) / 2 - bandH / 2)));
                 const m = motionOf(w, h, y0, bandH);
@@ -373,6 +420,7 @@ window.calTracker = {
                 waveBusy = true;
                 waveSeq++;
                 lastWaveAt = Date.now();
+                analyzingN = burst.length;
                 wave.postMessage({ seq: waveSeq, burst }, burst.map(b => b.buffer));
             };
 
@@ -390,6 +438,15 @@ window.calTracker = {
                         const image = ctx.getImageData(0, 0, w, h);
                         const choice = this.updateDetection(video, image, w, h);
                         feedWave(image, w, h, choice);
+                        // Wedged-worker watchdog: no reply long past the 25s budget →
+                        // stop claiming "analyzing" and allow a re-post (a stale reply
+                        // arriving later is dropped by the seq check).
+                        if (waveBusy && Date.now() - lastWaveAt > 60000) waveBusy = false;
+                        if (!wave || waveDead) status("searching", 0);
+                        else if (waveBusy) status("analyzing", analyzingN);
+                        else if (Date.now() < noreadUntil) status("noread", 0);
+                        else if (choice) status("locked", burstBuf.length);
+                        else status("searching", 0);
                         decode: for (const red of [false, true]) {
                             if (red) {
                                 // Red-channel pass: colored inks (blue bars on bottles are

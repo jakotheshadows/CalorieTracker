@@ -4,7 +4,7 @@
    manual number-entry fallback that works in every browser. *@
 <div class="scanner-panel">
     <div class="usda-search-row usda-status-row">
-        <span class="muted small">@(_error ?? "Point the camera at the barcode, as close as it stays reasonably sharp — the orange box shows what the scanner sees. Then hold still.")</span>
+        <span class="muted small">@(_error ?? _status ?? "Point the camera at the barcode, as close as it stays reasonably sharp — the orange box shows what the scanner sees. Then hold still.")</span>
         <span class="spacer"></span>
         @if (_error is null && _cameraInfo is not null)
         {
