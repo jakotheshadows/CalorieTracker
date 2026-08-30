@@ -942,9 +942,14 @@
                 // scale. Legit internal gaps and merge seams overlap in size, so emit
                 // BOTH readings: the chain and its stricter sub-chains; the caller's
                 // decodability pre-rank picks the real one.
+                // 2.0x median: a code's quiet zone next to adjacent label text is a
+                // ~2-3x-median crossing gap, and missing the split leaves only the
+                // merged span (~2x wrong module width — unrecoverable downstream).
+                // Over-splitting is harmless: the coarse chain above stays emitted,
+                // and half-code fragments die at the crossing floor or the pre-rank.
                 let s = a, split = false;
                 for (let i = a + 1; i <= b; i++)
-                    if (xs[i] - xs[i - 1] > 2.5 * median) {
+                    if (xs[i] - xs[i - 1] > 2.0 * median) {
                         if (i - 1 > s) emit(s, i - 1);
                         s = i;
                         split = true;
