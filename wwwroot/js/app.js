@@ -301,18 +301,11 @@ window.calTracker = {
                     const { seq, result } = ev.data;
                     if (session !== this.session || seq !== waveSeq) return;
                     if (result && result.digits) {
-                        // A decisively certified read (far ahead of every rival AND
-                        // every visual confusion; observed misreads sit at ratio>=0.9,
-                        // cousin<=0.99) skips the double-read: a second worker pass
-                        // costs 10-15s and re-reads near-identical pixels, adding no
-                        // real independence. Borderline reads still need agreement.
+                        // A burst result already carries multi-frame agreement on top
+                        // of the certification gates — accept directly.
                         waveNullStreak = 0;
-                        if (result.ratio <= 0.7 && result.cousinRatio >= 1.25) {
-                            this.stop();
-                            dotnetRef.invokeMethodAsync("OnBarcodeDetected", result.digits);
-                            return;
-                        }
-                        accept(result.digits);
+                        this.stop();
+                        dotnetRef.invokeMethodAsync("OnBarcodeDetected", result.digits);
                     } else {
                         // Nothing decodable in view: don't grind the CPU re-analyzing
                         // an unchanged codeless scene at full tilt; back off further
@@ -346,26 +339,41 @@ window.calTracker = {
                 for (let i = 0; i < d.length; i += 4) lastBand[i >> 2] = d[i];
                 return diff;
             };
-            // Feeds the worker the band around the DETECTED code (see
-            // updateDetection) — there is nothing to decode when detection sees
-            // nothing. A band jump (the user moved the code) reads as motion, which
-            // is exactly right: wait for the new position to settle.
+            // MULTI-FRAME collection: every tick with a detected code, the band
+            // around it is added to a rolling burst (motion-gated loosely — frames
+            // with moderate shake still carry evidence, and their DIFFERENT ghost
+            // offsets are precisely what fusion averages through). When enough
+            // frames are banked and the hand settles, the whole burst goes to the
+            // worker, which decodes it as one joint problem: a single frame at
+            // sigma/mw ~1.5 is ambiguous, N frames under different noise are not.
+            let burstBuf = [];
             const feedWave = (image, w, h, choice) => {
                 if (!wave || !choice) return;
                 const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
                 const y0 = Math.max(0, Math.min(h - bandH, Math.round((choice.by1 + choice.by2) / 2 - bandH / 2)));
-                stillTicks = motionOf(w, h, y0, bandH) < 3.5 ? stillTicks + 1 : 0;
+                const m = motionOf(w, h, y0, bandH);
+                stillTicks = m < 3.5 ? stillTicks + 1 : 0;
+                if (m < 8) {
+                    burstBuf.push({
+                        width: w, height: bandH,
+                        buffer: new Uint8ClampedArray(image.data.subarray(y0 * w * 4, (y0 + bandH) * w * 4)).buffer,
+                        xl: choice.xl, xr: choice.xr, mwEst: choice.mwEst,
+                        slope: choice.slope || 0,
+                        by1: choice.by1 - y0, by2: choice.by2 - y0,
+                    });
+                    if (burstBuf.length > 10) burstBuf.shift();
+                }
                 if (waveBusy || Date.now() < waveCooldownUntil) return;
-                // Fall back to shaky frames only after 8s without any attempt, so a
-                // trembling hand degrades to the old behavior instead of starving.
+                if (burstBuf.length < 4) return;
+                // Send once the hand settles; after 8s without any attempt send
+                // whatever is banked, so a trembling hand degrades instead of starving.
                 if (stillTicks < 2 && Date.now() - lastWaveAt < 8000) return;
-                const band = new Uint8ClampedArray(image.data.subarray(y0 * w * 4, (y0 + bandH) * w * 4));
+                const burst = burstBuf;
+                burstBuf = [];
                 waveBusy = true;
                 waveSeq++;
                 lastWaveAt = Date.now();
-                wave.postMessage(
-                    { seq: waveSeq, width: w, height: bandH, buffer: band.buffer },
-                    [band.buffer]);
+                wave.postMessage({ seq: waveSeq, burst }, burst.map(b => b.buffer));
             };
 
             const scan = async () => {
