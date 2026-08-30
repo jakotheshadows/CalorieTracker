@@ -84,8 +84,15 @@
     };
 
     // Cost of matching modules valStr starting at startModule against the profile.
-    // Amplitude and offset are fitted per segment (absorbs local lighting); lower = better.
-    function segCost(profile, pos, mw, cdf, e, startModule, valStr, shift) {
+    // Amplitude and offset are fitted per segment (absorbs local lighting); lower =
+    // better. requireEvidence changes the no-bar-correlation semantics: instead of
+    // the cheap residual-variance fallback (right for DECODING — a slight model
+    // mismatch at 1px modules must not veto a true grid), absence of bars is charged
+    // like the missing ink it is. Localization uses need this: with the cheap
+    // fallback, flat label regions score better than real guards, and every
+    // structure-evidence ranking built on guardCost silently inverts (measured on
+    // real frames: blank regions and text gaps out-scored the actual barcode).
+    function segCost(profile, pos, mw, cdf, e, startModule, valStr, shift, requireEvidence) {
         const N = profile.length;
         const nMods = valStr.length;
         const sh = shift || 0;
@@ -123,6 +130,8 @@
         // candidate generation). Without this, an over-blurred wrong template can
         // "amplify" its way into matching any short window it likes.
         const amp = profile.amp;
+        if (requireEvidence && amp && g < 0.25 * amp)
+            return 0.2 * amp * amp; // the bars this template asserts are not there
         if (amp && g > 0) g = Math.max(0.35 * amp, Math.min(1.4 * amp, g));
         if (g < 5) {
             // No positive bar correlation here. Don't hard-veto (a slight blur-model
@@ -169,10 +178,10 @@
         // structure (every L digit starts 0 and ends 1; every R digit starts 1 and
         // ends 0), so model them. Without the flanking bars the physics fit absorbs
         // their unmodeled ink bleeding into the window by inflating blur + ink spread.
-        const a = segCost(profile, pos, p.mw, cdf, p.e, 0, '1010');
+        const a = segCost(profile, pos, p.mw, cdf, p.e, 0, '1010', 0, true);
         if (!isFinite(a)) return Infinity;
-        const b = segCost(profile, pos, p.mw, cdf, p.e, 44, '1010101');
-        const c = segCost(profile, pos, p.mw, cdf, p.e, 91, '0101');
+        const b = segCost(profile, pos, p.mw, cdf, p.e, 44, '1010101', 0, true);
+        const c = segCost(profile, pos, p.mw, cdf, p.e, 91, '0101', 0, true);
         if (!isFinite(b) || !isFinite(c)) return Infinity;
         // Real labels often print text close to the code, so keep the windows tight
         // and cap the term: it should veto misaligned grids, not dominate ranking.
@@ -188,6 +197,8 @@
 
     // Summed cost of the best-fitting pattern in each of the 12 digit windows —
     // a digit-agnostic measure of how well a grid + physics explains the code.
+    // Structure evidence only (never decodes digits), so absent bars are charged
+    // as absent, not excused (see segCost's requireEvidence).
     function freeDigitFit(profile, g) {
         const cdf = cdfFor(g.sigmaM * g.mw);
         const pos = gridPos(g);
@@ -197,7 +208,7 @@
             const table = d < 6 ? L : R;
             let best = Infinity;
             for (let digit = 0; digit < 10; digit++) {
-                const c = segCost(profile, pos, g.mw, cdf, g.e, startModule, table[digit]);
+                const c = segCost(profile, pos, g.mw, cdf, g.e, startModule, table[digit], 0, true);
                 if (c < best) best = c;
             }
             sum += best;
@@ -942,14 +953,13 @@
                 // scale. Legit internal gaps and merge seams overlap in size, so emit
                 // BOTH readings: the chain and its stricter sub-chains; the caller's
                 // decodability pre-rank picks the real one.
-                // 2.0x median: a code's quiet zone next to adjacent label text is a
-                // ~2-3x-median crossing gap, and missing the split leaves only the
-                // merged span (~2x wrong module width — unrecoverable downstream).
-                // Over-splitting is harmless: the coarse chain above stays emitted,
-                // and half-code fragments die at the crossing floor or the pre-rank.
+                // 2.5x median: tried at 2.0x to cut merged code+text spans at their
+                // quiet-zone seam, but that also dissolves REAL codes into sub-floor
+                // fragments (a clean, decodable candidate on a real frame vanished);
+                // the evidence-aware pre-rank now handles merged-span demotion instead.
                 let s = a, split = false;
                 for (let i = a + 1; i <= b; i++)
-                    if (xs[i] - xs[i - 1] > 2.0 * median) {
+                    if (xs[i] - xs[i - 1] > 2.5 * median) {
                         if (i - 1 > s) emit(s, i - 1);
                         s = i;
                         split = true;

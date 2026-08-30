@@ -437,7 +437,9 @@ window.calTracker = {
                 for (let y0 = 0; y0 + bandH <= h; y0 += step) {
                     const cands = U.locate(image, y0, y0 + bandH);
                     if (cands)
-                        for (const c of cands.slice(0, 2)) {
+                        // Keep all of a band's candidates: a real code has ranked
+                        // THIRD in its band behind wider merged spans (measured).
+                        for (const c of cands) {
                             c.y0 = y0;
                             c.y1 = y0 + bandH;
                             pool.push(c);
@@ -450,7 +452,7 @@ window.calTracker = {
                 return null;
             }
             pool.sort((a, b) => b.crossings - a.crossings);
-            pool = pool.slice(0, 6);
+            pool = pool.slice(0, 8);
             const now = Date.now();
             for (const c of pool) {
                 try {
