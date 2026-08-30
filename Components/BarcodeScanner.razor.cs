@@ -50,7 +50,8 @@ public partial class BarcodeScanner
             "locked" => n < 4
                 ? $"Barcode found — hold still… capturing frames ({n}/4)"
                 : $"Barcode found — {n} frames captured, hold still…",
-            "analyzing" => $"Reading… analyzing {n} frames. This can take ~30 s — keep the code in view.",
+            "reading" => "Reading… hold still.",
+            "analyzing" => $"Deep read: analyzing {n} frames — up to ~20 s. Keep the code in view.",
             "noread" => "That pass wasn't certain enough — still trying. Adjust distance or angle slightly.",
             _ => null, // "searching" falls back to the default guidance line
         };

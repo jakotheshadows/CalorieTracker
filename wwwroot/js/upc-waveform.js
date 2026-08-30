@@ -19,12 +19,20 @@
     const R = L.map(p => [...p].map(ch => ch === '0' ? '1' : '0').join(''));
     const STEP = 0.25; // profile samples per pixel = 1/STEP
 
+    // Memoized: fullCost rebuilds the same strings hundreds of thousands of times
+    // during verification (measured), and the pool of distinct codes is tiny.
+    const MODCACHE = new Map();
     const buildModules = (d12) => {
-        let m = '101';
+        let m = MODCACHE.get(d12);
+        if (m !== undefined) return m;
+        m = '101';
         for (let i = 0; i < 6; i++) m += L[+d12[i]];
         m += '01010';
         for (let i = 6; i < 12; i++) m += R[+d12[i]];
-        return m + '101';
+        m += '101';
+        if (MODCACHE.size > 4000) MODCACHE.clear();
+        MODCACHE.set(d12, m);
+        return m;
     };
 
     const checksumOk = (d) => {
@@ -99,6 +107,7 @@
     // fallback, flat label regions score better than real guards, and every
     // structure-evidence ranking built on guardCost silently inverts (measured on
     // real frames: blank regions and text gaps out-scored the actual barcode).
+    let SEG_TV = new Float64Array(4096);
     function segCost(profile, pos, mw, cdf, e, startModule, valStr, shift, requireEvidence) {
         const N = profile.length;
         const nMods = valStr.length;
@@ -112,7 +121,11 @@
                 bars.push([pos(startModule + k) + sh - e * mw, pos(startModule + k + 1) + sh + e * mw]);
         }
         let st = 0, so = 0, stt = 0, sto = 0, n = 0;
-        const tv = new Float64Array(ib - ia + 1);
+        // Scratch reuse: this allocation sat in the hottest loop of the whole module
+        // (millions of calls per decode); workers are single-threaded, so one shared
+        // buffer is safe.
+        if (SEG_TV.length < ib - ia + 1) SEG_TV = new Float64Array((ib - ia + 1) * 2);
+        const tv = SEG_TV;
         // Bars are ordered and non-nested, so a two-pointer sweep visits only the
         // few bars near each sample instead of all of them (this is the hot loop).
         const cut = cdf.cut || 3;
@@ -215,11 +228,14 @@
     // a digit-agnostic measure of how well a grid + physics explains the code.
     // Structure evidence only (never decodes digits), so absent bars are charged
     // as absent, not excused (see segCost's requireEvidence).
-    function freeDigitFit(profile, g) {
+    // stride 2 = every other digit window: still 6 windows (42 modules) of evidence
+    // on top of the guards — plenty for physics estimation at half the cost. Full
+    // stride stays the default everywhere rankings between grids are compared.
+    function freeDigitFit(profile, g, stride) {
         const cdf = cdfOf(g, g.mw);
         const pos = gridPos(g);
         let sum = 0;
-        for (let d = 0; d < 12; d++) {
+        for (let d = 0; d < 12; d += (stride || 1)) {
             const startModule = d < 6 ? 3 + 7 * d : 50 + 7 * (d - 6);
             const table = d < 6 ? L : R;
             let best = Infinity;
@@ -379,6 +395,9 @@
         // e seeds MUST include 0: with e=0.15 the widened middle-guard template
         // decorrelates from zero-ink-spread data and the evidence veto rejects the
         // TRUE grid (measured: middle guard 7543 at e=0.15 vs 1155 at e=0).
+        // Seed spacing is NOT a fast-mode knob: a sharp code's alignment basin is
+        // narrower than a 0.75-sample dx step (measured: coarse steps decode blurry
+        // cases fine and lose the sharp ones).
         for (const sigmaM of [0.9, 1.3])
             for (const e of [0, 0.2])
                 for (let dm = -0.18; dm <= 0.05; dm += 0.01)
@@ -450,7 +469,7 @@
             // digits badly enough that the truth never enters the beams.
             let g = refine((p) => guardCost(profile, p), { ...seed }, 3, true);
             let ctx = null;
-            for (let iter = 0; iter < 3; iter++) {
+            for (let iter = 0; iter < (o.fast ? 2 : 3); iter++) {
                 const perDigit = digitTable(profile, g, 4, ctx);
                 if (!perDigit) break;
                 noteCandidates(perDigit, g);
@@ -476,10 +495,10 @@
     // Geometry-only refinement of a candidate against one profile under frozen physics.
     // Blur and ink spread are properties of the frame, not of a candidate — leaving
     // them free lets wrong strings hide behind extra smear.
-    function geoRefine(profile, digits, seed, phys) {
+    function geoRefine(profile, digits, seed, phys, passes) {
         let cur = { x0: seed.x0, mw: seed.mw, q: seed.q || 0, r: seed.r || 0, ...phys };
         let curCost = fullCost(profile, digits, cur);
-        for (let pass = 0; pass < 4; pass++) {
+        for (let pass = 0; pass < (passes || 4); pass++) {
             let improved = false;
             for (const [key, deltas] of [
                 ['x0', [-0.5, -0.25, 0.25, 0.5]],
@@ -511,6 +530,8 @@
         ['r', [-0.000003, 0.000003]],
     ];
     function fitPhysics(prof, seed0, sigmas, passes, deadline, withGhost) {
+        // Full-stride objective: a half-stride variant was measured to land on
+        // physics that halves the clean-case decision margin — not worth the ms.
         const cost1 = (p) => guardCost(prof, p) + freeDigitFit(prof, p);
         // The ghost dimension is for BURST per-frame physics only: the guard +
         // free-digit objective genuinely prefers over-smeared combos, and a
@@ -669,7 +690,9 @@
             fitNorm = 0;
         } else {
             const fitted = fitPhysics(profiles[0], seed0,
-                [0.5, 0.65, 0.8, 0.95, 1.1, 1.3, 1.55, 1.8, 2.1, 2.4], 3, o.deadline);
+                o.fast ? [0.5, 0.8, 1.1, 1.4, 1.8, 2.2]
+                    : [0.5, 0.65, 0.8, 0.95, 1.1, 1.3, 1.55, 1.8, 2.1, 2.4],
+                o.fast ? 2 : 3, o.deadline);
             const shared = refine(
                 (p) => profiles.reduce((s, prof) => s + guardCost(prof, p) + freeDigitFit(prof, p), 0),
                 fitted, 3, true);
@@ -682,12 +705,22 @@
             const PHYS = physBracket(shared);
             PHYSLIST = profiles.map(() => PHYS);
         }
+        // Blur/ink physics is a property of the FRAME, not of reading direction —
+        // export it so the caller's reversed pass can skip re-fitting it.
+        if (o.physOut) { o.physOut.physList = PHYSLIST; o.physOut.weights = weights; }
 
         // Joint score: per profile, refine geometry once under that profile's center
         // physics (best over seeds), then rescore that geometry under the bracket
         // ends. Fewer seeds per profile in burst mode — N frames buy redundancy.
         const seedsJ = profiles.length > 4 ? seeds.slice(0, 2) : seeds;
         const jointOf = new Map();
+        // Geometry cache: the grid (x0/mw/curvature) is a property of the PHYSICAL
+        // code in each profile, not of the candidate string — candidates differ only
+        // in digits. The first candidate scored on a profile pays for the full
+        // multi-seed 4-pass descent; every later candidate warm-starts from that
+        // fitted grid and only polishes (measured: verification was ~95% of decode
+        // time, almost all of it re-deriving the same grid per candidate).
+        const geoCache = profiles.map(() => null);
         const jointScore = (digits) => {
             if (jointOf.has(digits)) return jointOf.get(digits);
             let s = 0;
@@ -695,9 +728,17 @@
                 const prof = profiles[i], PH = PHYSLIST[i], w = weights[i];
                 if (w < 0.25) continue; // junk frame: no discrimination left in it
                 let best = null;
-                for (const seed of seedsJ) {
-                    const r = geoRefine(prof, digits, seed, PH[1]);
-                    if (!best || r.cost < best.cost) best = r;
+                if (geoCache[i]) {
+                    // Full descent depth from the warm grid: shallow 2-pass polish
+                    // was measured to under-fit every candidate equally, compressing
+                    // the winner/runner-up ratios the accept gates depend on.
+                    best = geoRefine(prof, digits, geoCache[i], PH[1]);
+                } else {
+                    for (const seed of seedsJ) {
+                        const r = geoRefine(prof, digits, seed, PH[1]);
+                        if (!best || r.cost < best.cost) best = r;
+                    }
+                    geoCache[i] = best.geo;
                 }
                 s += w * (best.cost
                     + fullCost(prof, digits, { ...best.geo, ...PH[0] })
@@ -706,16 +747,23 @@
             jointOf.set(digits, s);
             return s;
         };
-        // cheap pre-rank on the first profile / its center physics only
+        // cheap pre-rank on the first profile / its center physics only — same
+        // warm-start scheme, primed by the first pool entry (best generation beam)
         const cheap = new Map();
+        let cheapGeo = null;
         const cheapScore = (digits) => {
             if (!cheap.has(digits)) {
-                let best = Infinity;
-                for (const seed of seeds.slice(0, 2)) {
-                    const c = geoRefine(profiles[0], digits, seed, PHYSLIST[0][1]).cost;
-                    if (c < best) best = c;
+                let best = null;
+                if (cheapGeo) {
+                    best = geoRefine(profiles[0], digits, cheapGeo, PHYSLIST[0][1], 2);
+                } else {
+                    for (const seed of seeds.slice(0, 2)) {
+                        const r = geoRefine(profiles[0], digits, seed, PHYSLIST[0][1]);
+                        if (!best || r.cost < best.cost) best = r;
+                    }
+                    cheapGeo = best.geo;
                 }
-                cheap.set(digits, best);
+                cheap.set(digits, best.cost);
             }
             return cheap.get(digits);
         };
@@ -740,8 +788,9 @@
             let screenGeos = null;
             // Screen repairs on two independent bands (top and bottom) with geometry
             // refit to the current best: one band's noise can mis-rank the repairs
-            // that lead toward the truth.
-            const screenIdx = profiles.length > 1 ? [0, profiles.length - 1] : [0];
+            // that lead toward the truth. Fast mode screens on one band — screening
+            // only orders proposals; the joint verify still judges on all bands.
+            const screenIdx = !o.fast && profiles.length > 1 ? [0, profiles.length - 1] : [0];
             const screenProfs = screenIdx.map(i => profiles[i]);
             const staticScore = (digits) => {
                 if (screenGeos === null)
@@ -759,13 +808,17 @@
                     const d11 = best.slice(0, p) + digit + best.slice(p + 1, 11);
                     repairs.add(d11 + forcedCheckDigit(d11));
                 }
-            for (let p = 0; p < 10; p++)
-                for (let d1 = 0; d1 < 10; d1++)
-                    for (let d2 = 0; d2 < 10; d2++) {
-                        if (+best[p] === d1 && +best[p + 1] === d2) continue;
-                        const d11 = best.slice(0, p) + d1 + d2 + best.slice(p + 2, 11);
-                        repairs.add(d11 + forcedCheckDigit(d11));
-                    }
+            // The exhaustive adjacent-pair family is ~800 strings whose static screens
+            // dominated fast-mode repair time; the cousin-pair family below already
+            // covers the physically-real blur confusions, so fast mode skips this.
+            if (!o.fast)
+                for (let p = 0; p < 10; p++)
+                    for (let d1 = 0; d1 < 10; d1++)
+                        for (let d2 = 0; d2 < 10; d2++) {
+                            if (+best[p] === d1 && +best[p + 1] === d2) continue;
+                            const d11 = best.slice(0, p) + d1 + d2 + best.slice(p + 2, 11);
+                            repairs.add(d11 + forcedCheckDigit(d11));
+                        }
             // Blur flips digits independently at DISTANT positions too (each a local
             // one-bar-shift cousin confusion), and no chain of improving single moves
             // connects them (a lone fix breaks the forced check digit, so it screens
@@ -879,7 +932,8 @@
             const row = y * W;
             return data[(row + xi) * 4] * (1 - fx) + data[(row + xi + 1) * 4] * fx;
         };
-        const sub = Math.max(1, Math.round(sc));
+        // 4 sub-reads cover the box span at 1.2 px/module scale; more is oversampling.
+        const sub = Math.max(1, Math.min(4, Math.round(sc)));
         const redBox = (x, y) => {
             if (sub === 1) return redAt(x, y);
             let s = 0;
@@ -889,11 +943,17 @@
         const n = Math.round((xb - xa) / (STEP * sc));
         const prof = new Float64Array(n);
         const rows = y2 - y1;
+        // Vertical stride: bars are vertical, so rows are redundant samples of the
+        // same waveform — ~32 of them average the noise down as far as it goes.
+        // (This loop was measured at up to a third of a whole fast decode.)
+        const ystep = Math.max(1, Math.floor(rows / 32));
         for (let i = 0; i < n; i++) {
-            let sum = 0;
-            for (let y = y1; y < y2; y++)
+            let sum = 0, m = 0;
+            for (let y = y1; y < y2; y += ystep) {
                 sum += redBox(xa + i * STEP * sc + shear * ((y - y1) / rows - 0.5), y);
-            prof[i] = sum / rows;
+                m++;
+            }
+            prof[i] = sum / m;
         }
         // White baseline: linear fit through the robust white level of two known-white
         // regions. A rolling local max was used here before, but under heavy blur it
@@ -1297,24 +1357,38 @@
         const cands = locate(img, y1, y2);
         if (!cands) return null;
         const deadline = o.budgetMs ? Date.now() + o.budgetMs : Infinity;
-        // Refine every candidate before committing decode seconds: crossing counts
-        // alone rank a merged code+print chain above the clean code inside it, and
-        // crossing-span edges routinely grab adjacent print (a ±6-module extent
-        // error poisons the decode windows). Adopt the fitted position only when it
-        // moves meaningfully — small corrections are as likely to be fit noise.
+        // Rank candidates by crossings x vertical self-similarity — the same score
+        // that picks the box on the main thread. quickFit's structural COST was used
+        // for ranking here and measured to invert on real frames (a text line fits
+        // the guard model cheaper than a heavily defocused true code), sending whole
+        // decode budgets into print; it stays only as the per-candidate extent
+        // repair, run lazily on the candidates actually decoded.
         for (const c of cands) {
             if (Date.now() >= deadline) break;
             const br = barRows(img, c, y1, y2);
             c.by1 = br[0];
             c.by2 = br[1];
+            c.corr = br[2] === undefined ? 0.5 : br[2];
+        }
+        if (cands.length > 1)
+            cands.sort((u, w) => w.crossings * Math.max(0.15, w.corr) - u.crossings * Math.max(0.15, u.corr));
+        // fast mode: the caller (live scanner) already tracked and verified ONE
+        // region over several ticks — spend the whole small budget on it.
+        const maxCands = o.fast ? 1 : 3;
+        if (cands.length > maxCands) cands.length = maxCands;
+        // Extent repair on whatever will actually be decoded: crossing-span edges
+        // routinely grab adjacent print or slide under lighting gradients (a
+        // ±6-module extent error poisons the decode windows and wastes the whole
+        // budget). Adopt the fitted position only when it moves meaningfully —
+        // small corrections are as likely to be fit noise.
+        for (const c of cands) {
+            if (Date.now() >= deadline) break;
             const q = quickFit(img, c, y1, y2);
-            c.pre = q.pre;
             if (q.x0 !== undefined && Math.abs(q.x0 - c.xl) > 3.5 * c.mwEst) {
                 c.xl = Math.round(q.x0);
                 c.xr = Math.round(q.x0 + 95 * c.mwEst);
             }
         }
-        if (cands.length > 1) cands.sort((u, w) => u.pre - w.pre);
         const maxRatio = o.maxRatio === undefined ? 0.85 : o.maxRatio;
         // Misreads measure cousin <= 0.99 (a confusion fits BETTER than the winner,
         // worst observed 0.992); legitimate decodes cluster from ~1.07 up, with real
@@ -1365,12 +1439,33 @@
             // its own variance envelope splits heavily-blurred codes.
             const env = { xl: (loc.xl - xa) / scale, xr: (loc.xr - xa) / scale };
             const envRev = { xl: (xb - loc.xr) / scale, xr: (xb - loc.xl) / scale };
-            const jointOpts = { grids: o.grids || 6, verify: o.verify, repairIters: 6, env, deadline, returnTop: o.returnTop, debug: o.debug, mustScore: o.mustScore };
-            const fwd = decodeJoint(profiles, jointOpts);
+            const jointOpts = {
+                grids: o.grids || (o.fast ? 4 : 6),
+                verify: o.verify || (o.fast ? 8 : undefined),
+                repairIters: o.fast ? 2 : 6,
+                fast: o.fast,
+                // fast: generate candidates from the middle sub-band only (usually the
+                // cleanest rows); all three bands still JUDGE every candidate, which is
+                // where the misread protection lives.
+                genIdx: o.fast && profiles.length === 3 ? [1] : undefined,
+                env, deadline, returnTop: o.returnTop, debug: o.debug, mustScore: o.mustScore,
+            };
+            // fast: cap the forward pass at ~65% of what's left, so an upside-down
+            // code doesn't starve its own reversed pass out of the budget. The
+            // reversed pass reuses the forward pass's fitted physics (blur is a
+            // property of the frame, not of reading direction), so it runs on a
+            // smaller share.
+            const physOut = {};
+            const fwdOpts = o.fast && isFinite(deadline)
+                ? { ...jointOpts, physOut, deadline: Math.min(deadline, Date.now() + (deadline - Date.now()) * 0.65) }
+                : { ...jointOpts, physOut };
+            const fwd = decodeJoint(profiles, fwdOpts);
             // Only pay for the reversed pass when forward isn't decisively clean.
             let better = fwd, other = null;
             if ((!fwd || fwd.ratio > maxRatio * 0.85) && Date.now() < deadline) {
-                const rev = decodeJoint(profiles.map(reverseProfile), { ...jointOpts, env: envRev });
+                const revOpts = { ...jointOpts, env: envRev };
+                if (physOut.physList) revOpts.physList = physOut.physList;
+                const rev = decodeJoint(profiles.map(reverseProfile), revOpts);
                 better = !fwd ? rev : !rev ? fwd : (fwd.cost <= rev.cost ? fwd : rev);
                 other = better === fwd ? rev : fwd;
             }

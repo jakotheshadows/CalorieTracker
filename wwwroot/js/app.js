@@ -136,6 +136,8 @@ window.calTracker = {
             const session = ++this.session;
             this.teardown();
             this.deviceId = deviceId || null;
+            this.track = null; // a region tracked on the old camera/session is meaningless now
+            this.detectCache = null;
             const video = document.getElementById(videoId);
             if (!video) return "Scanner video element not found.";
 
@@ -239,9 +241,11 @@ window.calTracker = {
                 let tag = "";
                 const lc = this.lastChoice;
                 if (lc && Date.now() - (this.lastChoiceAt || 0) < 2000) {
-                    tag = "-box" + lc.xl + "x" + lc.xr + "y" + lc.by1 + "-" + lc.by2 +
+                    // Tracked coords are smoothed floats now — round for the filename.
+                    tag = "-box" + Math.round(lc.xl) + "x" + Math.round(lc.xr) +
+                        "y" + Math.round(lc.by1) + "-" + Math.round(lc.by2) +
                         "s" + (lc.slope || 0).toFixed(2).replace("-", "n") +
-                        (lc.pre !== undefined && isFinite(lc.pre) ? "p" + lc.pre.toFixed(2) : "");
+                        (lc.score !== undefined ? "sc" + Math.round(lc.score) : "");
                 }
                 a.download = "caltrack-frame-" + Date.now() + tag + ".png";
                 document.body.appendChild(a);
@@ -320,6 +324,7 @@ window.calTracker = {
             // is fed the scan-line band whenever it's idle. Its own gates (>=2 px/module,
             // decisive-margin) plus the double-read rule guard against misreads.
             let waveBusy = false, waveSeq = 0, waveCooldownUntil = 0, waveNullStreak = 0;
+            let fastBusy = false, fastSeq = 0, fastCooldownUntil = 0, fastDead = false;
             // Live status line: the deep decode takes tens of seconds, so without
             // feedback "working on it" and "seeing nothing" look identical. Stages
             // are pushed to Blazor only when they change.
@@ -330,10 +335,24 @@ window.calTracker = {
                 lastStatusKey = key;
                 try { dotnetRef.invokeMethodAsync("OnScanStatus", stage, n).catch(() => { }); } catch { /* teardown race */ }
             };
+            // TWO workers: "fast" runs a small-budget single-frame attempt on the
+            // tracked region continuously (easy codes decode in a couple of seconds,
+            // Dynamsoft-style), while "wave" runs the deep multi-frame bursts that
+            // crack the heavy-blur frames no single frame can. Independent workers,
+            // so a 25s burst never blocks the quick attempts.
             if (!this.waveWorker) {
                 try { this.waveWorker = new Worker("js/upc-worker.js"); } catch { /* optional */ }
             }
+            if (!this.fastWorker) {
+                try { this.fastWorker = new Worker("js/upc-worker.js"); } catch { /* optional */ }
+            }
             const wave = this.waveWorker;
+            const fastW = this.fastWorker;
+            const acceptDecode = (digits) => {
+                waveNullStreak = 0;
+                this.stop();
+                dotnetRef.invokeMethodAsync("OnBarcodeDetected", digits);
+            };
             if (wave) {
                 wave.onmessage = (ev) => {
                     waveBusy = false;
@@ -342,9 +361,7 @@ window.calTracker = {
                     if (result && result.digits) {
                         // A burst result already carries multi-frame agreement on top
                         // of the certification gates — accept directly.
-                        waveNullStreak = 0;
-                        this.stop();
-                        dotnetRef.invokeMethodAsync("OnBarcodeDetected", result.digits);
+                        acceptDecode(result.digits);
                     } else {
                         // Nothing decodable in view: don't grind the CPU re-analyzing
                         // an unchanged codeless scene at full tilt; back off further
@@ -355,12 +372,26 @@ window.calTracker = {
                         // idle window — flipping back to "hold still" mid-cooldown would
                         // coach the user to freeze on the framing that just failed.
                         noreadUntil = waveCooldownUntil;
+                        // Several deep passes refused the tracked region: stop defending
+                        // it — dropping the track lets a rival region win the box and
+                        // the next burst, instead of dead-locking on (say) print.
+                        if (waveNullStreak >= 3) this.track = null;
                     }
                 };
                 // A worker that can't load (stale SW cache, deploy mismatch) or dies
                 // still fires 'error'; without this, waveBusy would stick and the
                 // status line would promise an analysis that will never happen.
                 wave.onerror = () => { waveDead = true; waveBusy = false; };
+            }
+            if (fastW) {
+                fastW.onmessage = (ev) => {
+                    fastBusy = false;
+                    const { seq, result } = ev.data;
+                    if (session !== this.session || seq !== fastSeq) return;
+                    if (result && result.digits && !result.refused) acceptDecode(result.digits);
+                    else fastCooldownUntil = Date.now() + 900;
+                };
+                fastW.onerror = () => { fastDead = true; fastBusy = false; };
             }
             // Stillness gate: hand motion double-exposes the bars (measured ~8px
             // ghosting on a real frame — no blur model fits a double image), and the
@@ -394,27 +425,48 @@ window.calTracker = {
             // worker, which decodes it as one joint problem: a single frame at
             // sigma/mw ~1.5 is ambiguous, N frames under different noise are not.
             let burstBuf = [];
-            const feedWave = (image, w, h, choice) => {
-                if (!wave || waveDead || !choice) return;
+            const bandCut = (image, w, h, choice) => {
                 const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
                 const y0 = Math.max(0, Math.min(h - bandH, Math.round((choice.by1 + choice.by2) / 2 - bandH / 2)));
-                const m = motionOf(w, h, y0, bandH);
-                stillTicks = m < 3.5 ? stillTicks + 1 : 0;
-                if (m < 8) {
-                    burstBuf.push({
+                return {
+                    y0,
+                    meta: {
                         width: w, height: bandH,
                         buffer: new Uint8ClampedArray(image.data.subarray(y0 * w * 4, (y0 + bandH) * w * 4)).buffer,
                         xl: choice.xl, xr: choice.xr, mwEst: choice.mwEst,
                         slope: choice.slope || 0,
                         by1: choice.by1 - y0, by2: choice.by2 - y0,
-                    });
+                    },
+                };
+            };
+            const feedWave = (image, w, h, choice) => {
+                if ((!wave || waveDead) && (!fastW || fastDead)) return;
+                if (!choice) return;
+                const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
+                const y0m = Math.max(0, Math.min(h - bandH, Math.round((choice.by1 + choice.by2) / 2 - bandH / 2)));
+                const m = motionOf(w, h, y0m, bandH);
+                stillTicks = m < 3.5 ? stillTicks + 1 : 0;
+                // FAST attempt: continuous small-budget single-frame decodes on the
+                // tracked region — the "Dynamsoft path". Fires as soon as the tracker
+                // has held a region for a few ticks; sharp/moderate frames decode in
+                // ~2s without waiting for burst collection or stillness.
+                if (fastW && !fastDead && !fastBusy && Date.now() >= fastCooldownUntil
+                    && choice.age >= 3 && choice.missTicks === 0 && m < 8) {
+                    const cut = bandCut(image, w, h, choice);
+                    fastBusy = true;
+                    fastSeq++;
+                    fastW.postMessage({ seq: fastSeq, fast: true, ...cut.meta }, [cut.meta.buffer]);
+                }
+                if (!wave || waveDead) return;
+                if (m < 8) {
+                    burstBuf.push(bandCut(image, w, h, choice).meta);
                     if (burstBuf.length > 10) burstBuf.shift();
                 }
                 if (waveBusy || Date.now() < waveCooldownUntil) return;
                 if (burstBuf.length < 4) return;
-                // Send once the hand settles; after 8s without any attempt send
+                // Send once the hand settles; after 6s without any attempt send
                 // whatever is banked, so a trembling hand degrades instead of starving.
-                if (stillTicks < 2 && Date.now() - lastWaveAt < 8000) return;
+                if (stillTicks < 2 && Date.now() - lastWaveAt < 6000) return;
                 const burst = burstBuf;
                 burstBuf = [];
                 waveBusy = true;
@@ -442,10 +494,10 @@ window.calTracker = {
                         // stop claiming "analyzing" and allow a re-post (a stale reply
                         // arriving later is dropped by the seq check).
                         if (waveBusy && Date.now() - lastWaveAt > 60000) waveBusy = false;
-                        if (!wave || waveDead) status("searching", 0);
-                        else if (waveBusy) status("analyzing", analyzingN);
+                        if (waveBusy) status("analyzing", analyzingN);
+                        else if (fastBusy) status("reading", 0);
                         else if (Date.now() < noreadUntil) status("noread", 0);
-                        else if (choice) status("locked", burstBuf.length);
+                        else if (choice && wave && !waveDead) status("locked", burstBuf.length);
                         else status("searching", 0);
                         decode: for (const red of [false, true]) {
                             if (red) {
@@ -513,8 +565,14 @@ window.calTracker = {
             } catch { return null; }
             const box = video && video.parentElement ? video.parentElement.querySelector(".scan-box") : null;
             if (!pool.length) {
-                if (box && Date.now() - this.boxSeenAt > 600) box.classList.add("hidden");
-                return null;
+                // No candidates this tick — the tracker still gets to ride out its
+                // short grace window (locate flickers on real frames).
+                const kept = this.updateTrack([], Date.now());
+                if (kept && box) this.drawBox(video, box, kept, w, h);
+                else if (box && Date.now() - this.boxSeenAt > 600) box.classList.add("hidden");
+                this.lastChoice = kept;
+                this.lastChoiceAt = Date.now();
+                return kept;
             }
             pool.sort((a, b) => b.crossings - a.crossings);
             pool = pool.slice(0, 8);
@@ -531,9 +589,11 @@ window.calTracker = {
                 const v = this.detectCache.get(c.key);
                 if (v && now - v.t < 2500) c.pre = v.pre;
             }
-            // Verify the best UNVERIFIED candidate each slot — never only the current
-            // leader, or the first verified region wins forever by default. Over a few
-            // ticks every competitive region gets structurally scored.
+            // Verify the best UNVERIFIED candidate each slot. quickFit's structural
+            // cost is a JUNK VETO only, never a preference: under real blur a text
+            // line fits the guard model cheaper than the true code (measured on every
+            // saved corpus frame — the old lowest-pre-wins rule locked the box onto
+            // print and sent whole decode budgets into it).
             if (now - this.lastQuickFitAt > 600) {
                 const target = pool
                     .filter(c => c.pre === undefined)
@@ -547,17 +607,68 @@ window.calTracker = {
                     } catch { /* verification is best-effort */ }
                 }
             }
-            const verified = pool.filter(c => c.pre !== undefined && isFinite(c.pre));
-            const choice = verified.length
-                ? verified.reduce((a, b) => (a.pre <= b.pre ? a : b))
-                : pool.reduce((a, b) => (a.score >= b.score ? a : b));
+            pool = pool.filter(c => c.pre === undefined || c.pre < 3);
             if (this.detectCache.size > 40)
                 for (const [k, v] of this.detectCache) if (now - v.t > 4000) this.detectCache.delete(k);
-            if (box) this.drawBox(video, box, choice, w, h);
+            const choice = this.updateTrack(pool, now);
+            if (choice && box) this.drawBox(video, box, choice, w, h);
+            else if (box && Date.now() - this.boxSeenAt > 600) box.classList.add("hidden");
             // For saveFrame: what the box was showing at capture time.
             this.lastChoice = choice;
             this.lastChoiceAt = now;
             return choice;
+        },
+
+        // Temporal tracker over the per-tick candidate pools: per-tick winners are
+        // noisy (crossing counts flicker with motion), so the box used to jump all
+        // over the frame. The incumbent region is kept while any candidate overlaps
+        // it, its geometry eased toward the fresh measurement, and a challenger has
+        // to out-score it decisively for several consecutive ticks to take over.
+        track: null,
+        updateTrack: function (pool, now) {
+            const t = this.track;
+            const overlaps = (c) => {
+                if (!t) return false;
+                const ox = Math.min(c.xr, t.xr) - Math.max(c.xl, t.xl);
+                const oy = Math.min(c.by2, t.by2) - Math.max(c.by1, t.by1);
+                return ox > 0.5 * Math.min(c.xr - c.xl, t.xr - t.xl) && oy > -40;
+            };
+            const top = pool.reduce((a, b) => (a && a.score >= b.score ? a : b), null);
+            let match = null;
+            for (const c of pool) if (overlaps(c) && (!match || c.score > match.score)) match = c;
+            if (t && match) {
+                // Ease toward the fresh measurement: kills pixel jitter without
+                // lagging real hand movement by more than a tick or two.
+                const e = 0.45;
+                t.xl += (match.xl - t.xl) * e;
+                t.xr += (match.xr - t.xr) * e;
+                t.by1 += (match.by1 - t.by1) * e;
+                t.by2 += (match.by2 - t.by2) * e;
+                t.slope += ((match.slope || 0) - t.slope) * e;
+                t.mwEst = match.mwEst;
+                t.score = 0.7 * t.score + 0.3 * match.score;
+                t.missTicks = 0;
+                t.age++;
+                if (top && top !== match && top.score > 1.35 * t.score) {
+                    t.challengeTicks = (t.challengeTicks || 0) + 1;
+                    if (t.challengeTicks >= 3) this.track = this.newTrack(top, now);
+                } else t.challengeTicks = 0;
+            } else if (t && t.missTicks < 4) {
+                // Locate flickers on real frames; keep the region briefly so the
+                // burst buffer isn't starved by one empty tick.
+                t.missTicks++;
+                t.age++;
+            } else {
+                this.track = top ? this.newTrack(top, now) : null;
+            }
+            return this.track;
+        },
+        newTrack: function (c, now) {
+            return {
+                xl: c.xl, xr: c.xr, by1: c.by1, by2: c.by2,
+                slope: c.slope || 0, mwEst: c.mwEst, score: c.score,
+                missTicks: 0, challengeTicks: 0, age: 1, bornAt: now,
+            };
         },
 
         // Snug orange box over the chosen candidate (bar rows only), tilted to the
@@ -607,6 +718,10 @@ window.calTracker = {
             if (this.waveWorker) {
                 this.waveWorker.terminate();
                 this.waveWorker = null;
+            }
+            if (this.fastWorker) {
+                this.fastWorker.terminate();
+                this.fastWorker = null;
             }
         },
     },
