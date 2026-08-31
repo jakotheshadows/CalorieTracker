@@ -428,12 +428,28 @@ window.calTracker = {
             const bandCut = (image, w, h, choice) => {
                 const bandH = Math.min(h, Math.max(96, Math.round(h * 0.2)));
                 const y0 = Math.max(0, Math.min(h - bandH, Math.round((choice.by1 + choice.by2) / 2 - bandH / 2)));
+                const asCand = (c) => ({
+                    xl: c.xl, xr: c.xr, cxl: c.cxl, mwEst: c.mwEst,
+                    slope: c.slope || 0, by1: c.by1 - y0, by2: c.by2 - y0,
+                });
+                // Hand over the tracked region FIRST, then the runners-up that live in
+                // the same band: the ranking is good but not infallible, and a decode
+                // attempt on the true region is worth far more than a tie-break.
+                const cands = [asCand(choice)];
+                for (const c of (this.lastPool || [])) {
+                    if (cands.length >= 3) break;
+                    if (c === choice || c.by1 === undefined) continue;
+                    if (c.by1 - y0 < 0 || c.by2 - y0 > bandH) continue;
+                    if (Math.abs(c.xl - choice.xl) < 20 && Math.abs(c.xr - choice.xr) < 20) continue;
+                    cands.push(asCand(c));
+                }
                 return {
                     y0,
                     meta: {
                         width: w, height: bandH,
                         buffer: new Uint8ClampedArray(image.data.subarray(y0 * w * 4, (y0 + bandH) * w * 4)).buffer,
-                        xl: choice.xl, xr: choice.xr, mwEst: choice.mwEst,
+                        cands,
+                        xl: choice.xl, xr: choice.xr, cxl: choice.cxl, mwEst: choice.mwEst,
                         slope: choice.slope || 0,
                         by1: choice.by1 - y0, by2: choice.by2 - y0,
                     },
@@ -574,7 +590,7 @@ window.calTracker = {
                 this.lastChoiceAt = Date.now();
                 return kept;
             }
-            pool.sort((a, b) => b.crossings - a.crossings);
+            pool.sort((a, b) => (b.qscore || 0) - (a.qscore || 0));
             pool = pool.slice(0, 8);
             const now = Date.now();
             for (const c of pool) {
@@ -584,7 +600,11 @@ window.calTracker = {
                     c.by2 = br[1];
                     c.corr = br[2] === undefined ? 0.5 : br[2];
                 } catch { c.by1 = c.y0; c.by2 = c.y1; c.corr = 0.3; }
-                c.score = c.crossings * Math.max(0.15, c.corr);
+                // Run-length quantization (locate's qscore) x vertical self-similarity.
+                // Crossing COUNT alone put the box on printed t-shirts and label text —
+                // clutter makes crossings easily, but not runs that are integer
+                // multiples of one module with none wider than four.
+                c.score = (c.qscore || 0) * Math.max(0.15, c.corr);
                 c.key = c.y0 + ":" + (c.xl >> 5) + ":" + ((c.xr - c.xl) >> 5);
                 const v = this.detectCache.get(c.key);
                 if (v && now - v.t < 2500) c.pre = v.pre;
@@ -610,6 +630,8 @@ window.calTracker = {
             pool = pool.filter(c => c.pre === undefined || c.pre < 3);
             if (this.detectCache.size > 40)
                 for (const [k, v] of this.detectCache) if (now - v.t > 4000) this.detectCache.delete(k);
+            // Runners-up are handed to the worker alongside the tracked region.
+            this.lastPool = pool;
             const choice = this.updateTrack(pool, now);
             if (choice && box) this.drawBox(video, box, choice, w, h);
             else if (box && Date.now() - this.boxSeenAt > 600) box.classList.add("hidden");
@@ -642,6 +664,9 @@ window.calTracker = {
                 const e = 0.45;
                 t.xl += (match.xl - t.xl) * e;
                 t.xr += (match.xr - t.xr) * e;
+                // cxl is the decode window's anchor — it must track with the extent.
+                if (match.cxl !== undefined)
+                    t.cxl = t.cxl === undefined ? match.cxl : t.cxl + (match.cxl - t.cxl) * e;
                 t.by1 += (match.by1 - t.by1) * e;
                 t.by2 += (match.by2 - t.by2) * e;
                 t.slope += ((match.slope || 0) - t.slope) * e;
@@ -665,7 +690,7 @@ window.calTracker = {
         },
         newTrack: function (c, now) {
             return {
-                xl: c.xl, xr: c.xr, by1: c.by1, by2: c.by2,
+                xl: c.xl, xr: c.xr, cxl: c.cxl, by1: c.by1, by2: c.by2,
                 slope: c.slope || 0, mwEst: c.mwEst, score: c.score,
                 missTicks: 0, challengeTicks: 0, age: 1, bornAt: now,
             };

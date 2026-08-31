@@ -1116,7 +1116,11 @@
                     const width = bestR - bestL + 1;
                     const st = crossStats(bestL, bestR);
                     if (width >= 140 && width <= 1600 && st.c >= 16)
-                        cands.push({ xl: bestL, xr: bestR, mwEst: mwOf(st), crossings: st.c });
+                        // cxl/cxr = outermost CROSSINGS (≈ modules 1 and 94). The decode
+                        // window must be built from these, never from xl/xr: the extent
+                        // pads outward onto neighbouring print and runs 7-25% wide, which
+                        // puts the true module width outside decodeProfile's seed range.
+                        cands.push({ xl: bestL, xr: bestR, mwEst: mwOf(st), crossings: st.c, cxl: st.first, cxr: st.last });
                 }
             }
         }
@@ -1147,7 +1151,7 @@
                 const xr = Math.min(W - 1, Math.round(xs[b] + m));
                 const width = xr - xl + 1;
                 if (width < 140 || width > 1600) return;
-                chainCands.push({ xl, xr, mwEst: wch / 92, crossings: count });
+                chainCands.push({ xl, xr, mwEst: wch / 92, crossings: count, cxl: xs[a], cxr: xs[b] });
             };
             for (const [a, b] of chains) {
                 emit(a, b);
@@ -1190,9 +1194,37 @@
             else if (c.crossings > merged[i].crossings) merged[i] = c;
         }
         if (!merged.length) return null;
-        // Provisional order (most barcode-like first); scanBand re-ranks the top few
-        // with a decodability pre-score before spending decode seconds.
-        merged.sort((u, w) => w.crossings - u.crossings);
+
+        // RUN-LENGTH QUANTIZATION score: the structural signature of a UPC is that
+        // every run is an integer number of modules and NO run exceeds 4 of them.
+        // Label text, gravel, chair mesh and t-shirt art all produce plenty of
+        // crossings (so a crossing count alone ranks them first — measured: the box
+        // sat on a printed t-shirt while the real code ranked nowhere), but their
+        // run lengths are unquantized and often far wider than 4 modules.
+        const quantOf = (xl, xr) => {
+            const inWin = [];
+            for (const x of xs) if (x >= xl && x <= xr) inWin.push(x);
+            if (inWin.length < 12) return 0;
+            const u = (inWin[inWin.length - 1] - inWin[0]) / 92;
+            if (!(u > 0)) return 0;
+            let intFit = 0, inRange = 0;
+            const tot = inWin.length - 1;
+            for (let i = 1; i < inWin.length; i++) {
+                const m = (inWin[i] - inWin[i - 1]) / u;
+                const r = Math.round(m);
+                if (r >= 1 && r <= 4) {
+                    inRange++;
+                    if (Math.abs(m - r) <= 0.3) intFit++;
+                }
+            }
+            // A UPC has 59 runs; defocus merges neighbours, so ~20 is still plausible.
+            const runsOk = tot >= 20 && tot <= 64 ? 1 : Math.max(0, 1 - Math.abs(tot - 45) / 60);
+            return (intFit / tot) * (inRange / tot) * runsOk;
+        };
+        for (const c of merged) c.qscore = quantOf(c.xl, c.xr);
+        // Most barcode-like first, crossings breaking ties; scanBand re-ranks the top
+        // few with a decodability pre-score before spending decode seconds.
+        merged.sort((u, w) => (w.qscore - u.qscore) || (w.crossings - u.crossings));
 
         // Bar tilt per candidate, from the structure tensor of 2D gradients over the
         // full band: even when blur erases individual modules, dozens of parallel
@@ -1315,7 +1347,10 @@
         const H = ry2 - ry1;
         const a = ry1 + ((H / 6) | 0), b = ry2 - ((H / 6) | 0);
         const prof = extractProfile(img, xa, xb, a, b, (loc.slope || 0) * (b - a), scale, anchors);
-        const envXl = (loc.xl - xa) / scale, envXr = (loc.xr - xa) / scale;
+        // Crossing-span window (see scanBand): the padded extent implies a module
+        // width well off the truth, which this pre-rank would then score as junk.
+        const qCodeL = loc.cxl === undefined ? loc.xl : loc.cxl - loc.mwEst;
+        const envXl = (qCodeL - xa) / scale, envXr = envXl + 95 * loc.mwEst / scale;
         const ia = Math.round(envXl / STEP), ib = Math.round(envXr / STEP);
         const inside = [...prof.slice(Math.max(0, ia), Math.min(prof.length, ib))].sort((u, v) => u - v);
         if (inside.length < 20) return { pre: Infinity };
@@ -1354,8 +1389,12 @@
         // mwEst is the ~unbiased crossing-span estimate; 2.05 buys a small buffer
         // over the 2.0 px/module single-frame ambiguity floor (see file header).
         const minMw = o.minMwPx === undefined ? 2.05 : o.minMwPx;
-        const cands = locate(img, y1, y2);
-        if (!cands) return null;
+        // The live scanner tracks and verifies ONE region over many ticks; when it
+        // hands that region over, re-locating from scratch inside a wide band throws
+        // that work away and can pick a different (wrong) candidate entirely.
+        const handed = o.cands && o.cands.length ? o.cands : (o.cand ? [o.cand] : null);
+        const cands = handed ? handed.map(c => ({ ...c })) : locate(img, y1, y2);
+        if (!cands || !cands.length) return null;
         const deadline = o.budgetMs ? Date.now() + o.budgetMs : Infinity;
         // Rank candidates by crossings x vertical self-similarity — the same score
         // that picks the box on the main thread. quickFit's structural COST was used
@@ -1370,24 +1409,32 @@
             c.by2 = br[1];
             c.corr = br[2] === undefined ? 0.5 : br[2];
         }
-        if (cands.length > 1)
-            cands.sort((u, w) => w.crossings * Math.max(0.15, w.corr) - u.crossings * Math.max(0.15, u.corr));
+        // Handed-over candidates arrive already ranked by the live scanner, which has
+        // seen the region across many ticks; only self-located ones need ranking.
+        if (!handed && cands.length > 1)
+            cands.sort((u, w) =>
+                (w.qscore || 0) * Math.max(0.15, w.corr) - (u.qscore || 0) * Math.max(0.15, u.corr));
         // fast mode: the caller (live scanner) already tracked and verified ONE
         // region over several ticks — spend the whole small budget on it.
         const maxCands = o.fast ? 1 : 3;
         if (cands.length > maxCands) cands.length = maxCands;
-        // Extent repair on whatever will actually be decoded: crossing-span edges
-        // routinely grab adjacent print or slide under lighting gradients (a
-        // ±6-module extent error poisons the decode windows and wastes the whole
-        // budget). Adopt the fitted position only when it moves meaningfully —
-        // small corrections are as likely to be fit noise.
-        for (const c of cands) {
-            if (Date.now() >= deadline) break;
-            const q = quickFit(img, c, y1, y2);
-            if (q.x0 !== undefined && Math.abs(q.x0 - c.xl) > 3.5 * c.mwEst) {
-                c.xl = Math.round(q.x0);
-                c.xr = Math.round(q.x0 + 95 * c.mwEst);
+        // Fit-based extent repair, as an ALTERNATIVE candidate rather than an
+        // override. Which anchor is better depends on the frame: when the code is
+        // sharp the crossing span is exact and the fitted x0 only adds noise
+        // (measured: a sharp synthetic went from ratio 0.36 to a refusal when the
+        // fit replaced it), but under heavy defocus the crossing detector misses
+        // bars and only the fit recovers the extent. So keep both readings and let
+        // the accept gates decide. Deep mode only — fast mode cannot afford it.
+        if (!o.fast) {
+            const extra = [];
+            for (const c of cands) {
+                if (extra.length + cands.length >= 3 || Date.now() >= deadline) break;
+                const q = quickFit(img, c, y1, y2);
+                if (q.x0 !== undefined && Math.abs(q.x0 - c.xl) > 3.5 * c.mwEst)
+                    // q.x0 is module 0; the decode window keys off cxl (module ~1).
+                    extra.push({ ...c, xl: Math.round(q.x0), xr: Math.round(q.x0 + 95 * c.mwEst), cxl: q.x0 + c.mwEst });
             }
+            cands.push(...extra);
         }
         const maxRatio = o.maxRatio === undefined ? 0.85 : o.maxRatio;
         // Misreads measure cousin <= 0.99 (a confusion fits BETTER than the winner,
@@ -1395,6 +1442,17 @@
         // mass at 1.07-1.10 (three knife-edge refusals observed at 1.069-1.078).
         // 1.05 keeps a ~6% margin over the worst misread and stops refusing truths.
         const minCousin = o.minCousin === undefined ? 1.05 : o.minCousin;
+        // A DECISIVE ratio stands on its own. ratio compares the winner against the
+        // best rival that is itself a legal (checksum-valid) code — exactly the
+        // misread risk — while the cousin sweep scores one-bar-shift variants
+        // WITHOUT the checksum, most of which are not legal codes at all. On real
+        // curved, glare-lit labels the model is imperfect enough that some such
+        // variant always fits a hair better, so the cousin gate alone refused every
+        // true decode ever measured on the frame corpus (truths at cousin ~0.85
+        // while winning ratio 0.49-0.71). Measured misreads sit at ratio >= 0.97,
+        // so a winner that explains the data ~1.4x better than any legal rival is
+        // far from any observed failure.
+        const decisive = o.decisiveRatio === undefined ? 0.75 : o.decisiveRatio;
         let lastRefused = null;
 
         for (const loc of cands) {
@@ -1435,10 +1493,21 @@
                 const anch = anchors.map(([p, q]) => [p + off, q + off]);
                 return extractProfile(img, xa + off, xb + off, a, b, slope * (b - a), scale, anch);
             });
-            // Hand the located extent (in profile coordinates) to candidate generation;
-            // its own variance envelope splits heavily-blurred codes.
-            const env = { xl: (loc.xl - xa) / scale, xr: (loc.xr - xa) / scale };
-            const envRev = { xl: (xb - loc.xr) / scale, xr: (xb - loc.xl) / scale };
+            // Decode window from the CROSSING span, never the padded extent. The
+            // extent brackets whatever the locator chained together (neighbouring
+            // print, label edges) and measured 7-25% wide on real frames; since
+            // decodeProfile seeds module width as env/95 and only searches
+            // -0.18/+0.05 around it, a wide extent puts the TRUE module width
+            // outside the seed range and the decode can never find it. The
+            // outermost crossings sit at ~modules 1 and 93, so the code's left
+            // edge is one module before the first crossing and the whole symbol is
+            // 95 modules wide. (Measured on a real frame: the truth went from
+            // unreachable to winning at ratio 0.60 with this change alone.)
+            const codeL = loc.cxl === undefined ? loc.xl : loc.cxl - loc.mwEst;
+            const codeR = codeL + 95 * loc.mwEst;
+            const envW = 95 * loc.mwEst / scale;
+            const env = { xl: (codeL - xa) / scale, xr: (codeL - xa) / scale + envW };
+            const envRev = { xl: (xb - codeR) / scale, xr: (xb - codeR) / scale + envW };
             const jointOpts = {
                 grids: o.grids || (o.fast ? 4 : 6),
                 verify: o.verify || (o.fast ? 8 : undefined),
@@ -1475,7 +1544,7 @@
             let effRatio = better ? better.ratio : 1;
             if (better && other && other.digits !== better.digits)
                 effRatio = Math.max(effRatio, better.cost / other.cost);
-            if (better && effRatio <= maxRatio && better.cousinRatio >= minCousin) {
+            if (better && effRatio <= maxRatio && (better.cousinRatio >= minCousin || effRatio <= decisive)) {
                 const out = { digits: better.digits, ratio: effRatio, cousinRatio: better.cousinRatio, mwPx: loc.mwEst };
                 out.rev = better !== fwd;
                 if (o.returnTop) out.finalists = better.finalists;
@@ -1536,8 +1605,13 @@
             const a = ry1 + ((h / 6) | 0), c = ry2 - ((h / 6) | 0);
             const prof = extractProfile(img, xa, xb, a, c, (b.slope || 0) * (c - a), scale, anchors);
             profiles.push(prof);
-            envs.push({ xl: (b.xl - xa) / scale, xr: (b.xr - xa) / scale });
-            envsRev.push({ xl: (xb - b.xr) / scale, xr: (xb - b.xl) / scale });
+            // Crossing-span decode window (see scanBand): the padded extent implies
+            // a module width off by enough to put the truth outside the seed range.
+            const codeL = b.cxl === undefined ? b.xl : b.cxl - b.mwEst;
+            const envW = 95 * b.mwEst / scale;
+            envs.push({ xl: (codeL - xa) / scale, xr: (codeL - xa) / scale + envW });
+            const codeR = codeL + 95 * b.mwEst;
+            envsRev.push({ xl: (xb - codeR) / scale, xr: (xb - codeR) / scale + envW });
         }
         if (!profiles.length) return null;
 
@@ -1591,7 +1665,7 @@
             // A gate-clean single-frame decode needs no further arbitration — the
             // burst must never do WORSE than its best frame alone. The judge handles
             // the frames where single-frame search is uncertain.
-            if (s1.digits && s1.ratio <= 0.85 && s1.cousinRatio >= 1.05) {
+            if (s1.digits && s1.ratio <= 0.85 && (s1.cousinRatio >= 1.05 || s1.ratio <= 0.75)) {
                 const out = { digits: s1.digits, ratio: s1.ratio, cousinRatio: s1.cousinRatio, mwPx: mwMed, frames: 1 };
                 if (o.debug) { out.top = s1.top; out.phys = s1.phys; }
                 return out;
@@ -1608,7 +1682,9 @@
                 debug: o.debug, mustScore: o.mustScore,
             });
             if (!judged) continue;
-            if (judged.ratio <= maxRatio && judged.cousinRatio >= minCousin) {
+            // Same decisive-ratio escape as single-frame (see scanBand), a notch
+            // tighter: N weighted frames agreeing makes a low ratio stronger still.
+            if (judged.ratio <= maxRatio && (judged.cousinRatio >= minCousin || judged.ratio <= 0.78)) {
                 const out = { digits: judged.digits, ratio: judged.ratio, cousinRatio: judged.cousinRatio, mwPx: mwMed, frames: profiles.length };
                 if (o.debug) { out.top = judged.top; out.inPool = judged.inPool; out.phys = judged.phys; }
                 return out;

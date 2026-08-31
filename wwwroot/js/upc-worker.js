@@ -19,14 +19,19 @@ self.onmessage = (ev) => {
         if (msg.burst) {
             const bands = msg.burst.map(b => ({
                 img: { width: b.width, height: b.height, data: new Uint8ClampedArray(b.buffer) },
-                xl: b.xl, xr: b.xr, mwEst: b.mwEst, slope: b.slope, by1: b.by1, by2: b.by2,
+                xl: b.xl, xr: b.xr, cxl: b.cxl, mwEst: b.mwEst, slope: b.slope, by1: b.by1, by2: b.by2,
             }));
             result = UpcWaveform.scanBurst(bands, { budgetMs: 25000 });
         } else {
             const img = { width: msg.width, height: msg.height, data: new Uint8ClampedArray(msg.buffer) };
+            // Reuse the region the scanner already tracked and verified, instead of
+            // re-locating inside the band and possibly landing on different clutter.
+            // The scanner's ranking is good but not infallible, so it hands over its
+            // best few regions; scanBand already knows how to try them in order.
+            const cands = msg.cands && msg.cands.length ? msg.cands : undefined;
             result = UpcWaveform.scanBand(img, 0, msg.height, msg.fast
-                ? { fast: true, budgetMs: 4500 }
-                : { budgetMs: 14000 });
+                ? { fast: true, budgetMs: 4500, cands }
+                : { budgetMs: 14000, cands });
         }
     } catch { /* a bad frame must not kill the worker */ }
     self.postMessage({ seq: msg.seq, result });
