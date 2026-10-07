@@ -42,6 +42,11 @@ claude mcp add caltrack -- ~/caltrack-mcp/caltrack-mcp --data-dir ~/Documents/Ca
 
 (`CALTRACK_DATA_DIR` works instead of `--data-dir`.)
 
+**Optional — your own USDA key.** `search_usda` / `add_menu_item` use USDA FoodData Central.
+Without a key the server uses api.data.gov's shared `DEMO_KEY` (about 10 requests an hour);
+get a free key at [api.data.gov/signup](https://api.data.gov/signup/) and add
+`"env": { "USDA_API_KEY": "your-key" }` to the server entry (or pass `--usda-key`).
+
 ## Tools
 
 | Tool | What it does |
@@ -50,6 +55,8 @@ claude mcp add caltrack -- ~/caltrack-mcp/caltrack-mcp --data-dir ~/Documents/Ca
 | `get_day` | One day's entries and totals, including ones queued but not yet seen by the app. |
 | `log_food` | Log servings of a **menu** item. Unknown names fail with the closest real names. |
 | `log_adhoc` | Log a one-off food with nutrition the user gave. Refuses foods that are on the menu. |
+| `search_usda` | Search USDA FoodData Central for a food's nutrition. |
+| `add_menu_item` | Add a food to the menu — by USDA id (the server fetches the numbers itself, at the label serving or USDA's household portion), or with numbers the user gave. |
 
 Dates are `yyyy-MM-dd`, `today` or `yesterday`, in the user's local time zone.
 
@@ -68,6 +75,16 @@ can never apply an op twice.
 `CalTrack.Core`, shared by the Blazor app and this server. When the server previews a day
 (saved data + pending ops), it runs exactly the code the app will run when it ingests them; a
 test asserts the two agree.
+
+**Numbers that never pass through the model.** `add_menu_item` takes a USDA id, not
+nutrition values: the server fetches the record and builds the item itself, so the numbers
+can't be misremembered or invented on the way. The item's description links to its USDA
+record. USDA values can't be overridden in the same call.
+
+**Old app versions can't lose new ops.** The app records the op kinds it understands in the
+data file; the server won't queue a newer kind (like `add_item`) until the app says it can
+apply it, and an app that meets an unknown kind leaves it in the inbox for a newer version
+instead of consuming it.
 
 **Tools for a model, not a person.** Ground, don't guess: `log_food` won't log a name that isn't
 on the menu, and never fuzzy-matches silently — it returns suggestions and makes the model pick

@@ -22,7 +22,7 @@ namespace CalTrack.Mcp;
 ///    say so rather than implying the app already shows them.
 /// </summary>
 [McpServerToolType]
-public static class CalTrackTools
+public static partial class CalTrackTools
 {
     private static readonly JsonSerializerOptions Out = new()
     {
@@ -40,7 +40,7 @@ public static class CalTrackTools
     [Description(
         "List the foods on the user's CalTrack menu (saved items and recipes) with per-serving nutrition. " +
         "These are the ONLY names log_food accepts. Call this before logging and match what the user said " +
-        "to these names; if nothing fits, ask the user rather than guessing.")]
+        "to these names; if nothing fits, look the food up with search_usda (then add_menu_item) or ask the user — never guess.")]
     public static string ListMenuItems(
         DataFolderStore store,
         [Description("Optional: only return items whose name contains this text (case-insensitive).")] string? search = null)
@@ -101,8 +101,8 @@ public static class CalTrackTools
             throw new McpException(
                 $"\"{name}\" is not on the user's menu, so nothing was logged. " +
                 (close.Count > 0 ? $"Closest menu names: {string.Join(", ", close.Select(c => $"\"{c}\""))}. " : "") +
-                "Use an exact name from list_menu_items, or ask the user. For a food that isn't on the menu, " +
-                "use log_adhoc — but only with nutrition the user has given or confirmed.");
+                "Use an exact name from list_menu_items, or ask the user. For a food that isn't on the menu, find it " +
+                "with search_usda and add it with add_menu_item, or use log_adhoc with nutrition the user gave.");
         }
 
         var op = new InboxOp
@@ -173,13 +173,23 @@ public static class CalTrackTools
     /// Write the op, then re-read the folder and confirm it's there — pending in the inbox,
     /// or already folded in by the app. Success is only reported for a write we can see.
     /// </summary>
-    private static object WriteAndVerify(DataFolderStore store, InboxOp op, DateOnly day, TimeProvider clock, FoodItem item)
+    /// <summary>
+    /// Write an op, then re-read the folder and confirm it's there — pending in the inbox,
+    /// or already folded in by the app. Returns the fresh snapshot and "queued"/"applied".
+    /// </summary>
+    private static (FolderSnapshot After, string Status) WriteVerified(DataFolderStore store, InboxOp op)
     {
         store.WriteOp(op);
         var after = store.Read();
-        var seen = after.Pending.Any(p => p.Id == op.Id) || after.View.ProcessedOpIds.Contains(op.Id);
-        if (!seen)
-            throw new McpException("The entry was written but couldn't be read back from the data folder, so it may not have been saved. Check the CalTrack app before retrying.");
+        var pending = after.Pending.Any(p => p.Id == op.Id);
+        if (!pending && !after.View.ProcessedOpIds.Contains(op.Id))
+            throw new McpException("The change was written but couldn't be read back from the data folder, so it may not have been saved. Check the CalTrack app before retrying.");
+        return (after, pending ? "queued" : "applied");
+    }
+
+    private static object WriteAndVerify(DataFolderStore store, InboxOp op, DateOnly day, TimeProvider clock, FoodItem item)
+    {
+        var (after, status) = WriteVerified(store, op);
 
         var cals = item.Calories is { } perServing ? Round(perServing * op.Servings) : (double?)null;
         return new
@@ -192,7 +202,7 @@ public static class CalTrackTools
                 calories = cals,
                 oneOff = op.Kind == InboxOp.LogAdHoc ? true : (bool?)null,
             },
-            status = after.Pending.Any(p => p.Id == op.Id) ? "queued" : "applied",
+            status,
             note = "Queued in the data folder's inbox; the CalTrack app adds it to the log automatically (within a few seconds if it's open, otherwise next time it opens).",
             day = DayReport(after, day, clock),
         };

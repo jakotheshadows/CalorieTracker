@@ -23,6 +23,9 @@ public sealed class IngestResult
     /// <summary>Files that are not valid ops; left in place, never deleted.</summary>
     public List<string> Unreadable { get; } = new();
 
+    /// <summary>Ops of a kind this app version doesn't know; left in place for a newer version.</summary>
+    public List<string> Unsupported { get; } = new();
+
     /// <summary>The data changed (ops applied or the processed-id list pruned) and must be saved.</summary>
     public bool DataChanged { get; set; }
 }
@@ -46,6 +49,19 @@ public static class Inbox
     public const string DirName = "inbox";
 
     private static readonly JsonSerializerOptions OpJson = new() { WriteIndented = true };
+
+    /// <summary>The op kinds this build applies. The app advertises it in <see cref="AppData.InboxKinds"/>.</summary>
+    public static readonly IReadOnlyList<string> SupportedKinds = new[] { InboxOp.LogFood, InboxOp.LogAdHoc, InboxOp.AddItem };
+
+    /// <summary>Kinds every app version that has a data folder at all can apply.</summary>
+    private static readonly string[] OriginalKinds = { InboxOp.LogFood, InboxOp.LogAdHoc };
+
+    /// <summary>
+    /// Can the app that saved <paramref name="main"/> apply <paramref name="kind"/>? Writers
+    /// must not queue an op the app would reject: it would be thrown away, not deferred.
+    /// </summary>
+    public static bool AppUnderstands(AppData main, string kind) =>
+        OriginalKinds.Contains(kind) || main.InboxKinds.Contains(kind);
 
     /// <summary>Lexically sortable, chronological, collision-free op file name.</summary>
     public static string FileNameFor(InboxOp op) =>
@@ -79,8 +95,13 @@ public static class Inbox
     /// </summary>
     public static (string? Summary, string? Error) Apply(AppData data, InboxOp op)
     {
-        if (!TryParseDay(op.Date, out var date)) return (null, $"bad date \"{op.Date}\"");
-        if (!(op.Servings > 0) || double.IsInfinity(op.Servings)) return (null, $"bad servings {op.Servings}");
+        // Logging ops target a day and an amount; adding a menu item has neither.
+        var date = default(DateOnly);
+        if (op.Kind is InboxOp.LogFood or InboxOp.LogAdHoc)
+        {
+            if (!TryParseDay(op.Date, out date)) return (null, $"bad date \"{op.Date}\"");
+            if (!(op.Servings > 0) || double.IsInfinity(op.Servings)) return (null, $"bad servings {op.Servings}");
+        }
 
         switch (op.Kind)
         {
@@ -102,6 +123,17 @@ public static class Inbox
                     return ($"{Fmt(op.Servings)} × {snap.Name} on {op.Date} (as a one-off — \"{name}\" is no longer on the menu)", null);
                 }
                 return (null, $"\"{name}\" is not on the menu");
+            }
+            case InboxOp.AddItem:
+            {
+                if (op.Item is not { } item || string.IsNullOrWhiteSpace(item.Name)) return (null, "missing menu item");
+                var name = item.Name.Trim();
+                // Names are unique across items AND recipes (case-insensitive), as in the app.
+                if (data.ResolveItem(name) is { } existing) return (null, $"\"{existing.Name}\" is already on the menu");
+                var copy = item.Clone();
+                copy.Name = name;
+                data.Items.Add(copy);
+                return ($"added {name} to the menu" + (copy.Calories is { } c ? $" ({Fmt(c)} kcal per {copy.ServingSize ?? "serving"})" : ""), null);
             }
             case InboxOp.LogAdHoc:
             {
@@ -129,6 +161,9 @@ public static class Inbox
             if (!IsOpFileName(f.Name)) continue;
             var op = TryParse(f.Text);
             if (op is null) result.Unreadable.Add(f.Name);
+            // A kind this build doesn't know stays in the inbox, unprocessed, for a newer app
+            // version — consuming it as "rejected" would silently throw the change away.
+            else if (!SupportedKinds.Contains(op.Kind)) result.Unsupported.Add(f.Name);
             else ops.Add((op, f.Name));
         }
         ops.Sort((a, b) => a.Op.CreatedUtc != b.Op.CreatedUtc

@@ -17,6 +17,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- Real USDA FoodData Central responses (captured 2026-10-07), served by a fake handler. -->
+  <ItemGroup>
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\CalTrack.Core\CalTrack.Core.csproj" />
     <ProjectReference Include="..\CalTrack.Mcp\CalTrack.Mcp.csproj" />

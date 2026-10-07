@@ -46,6 +46,7 @@ public partial class AppState
     private long _lastSeen;       // main file's lastModified as of our last read/write
     private string? _lastText;    // its content then (memory only): tells real edits from touched timestamps
     private bool _dirty;          // edits not yet in the folder (access lost, or a save failed)
+    private readonly HashSet<string> _unsupportedSeen = new(); // say "needs an update" once, not every tick
 
     public FolderState Folder { get; private set; } = FolderState.Unknown;
     public string? FolderName { get; private set; }
@@ -196,6 +197,10 @@ public partial class AppState
             await AdoptAsync(theirs, main);
         }
 
+        // Just updated to a build that understands more op kinds: say so in the file right
+        // away, rather than waiting for the next edit, so the MCP server can use them.
+        if (AdvertisesStaleKinds()) await WriteMainAsync(checkForOutsideChanges: false);
+
         _dirty = false;
         Folder = FolderState.Connected;
         await SaveMarksAsync();
@@ -253,10 +258,16 @@ public partial class AppState
                 }
             }
         }
+        // Advertise what this build can apply, so outside writers never queue an op kind
+        // the app would have to throw away (see Inbox.AppUnderstands).
+        Data.InboxKinds = Inbox.SupportedKinds.ToList();
         var json = AppDataJson.Serialize(Data, indented: true);
         _lastSeen = await folder.WriteFileAsync(Inbox.MainFileName, json);
         _lastText = json;
     }
+
+    /// <summary>True when the saved file doesn't yet advertise everything this build supports.</summary>
+    private bool AdvertisesStaleKinds() => !Data.InboxKinds.ToHashSet().SetEquals(Inbox.SupportedKinds);
 
     private async Task<string> SaveAsideAsync(string reason, string text)
     {
@@ -342,9 +353,11 @@ public partial class AppState
         // Only now — the saved main file records these ids, so a crash can't re-apply them.
         if (result.FilesToDelete.Count > 0) await folder.DeleteInboxAsync(result.FilesToDelete);
 
-        if (result.Applied.Count == 1) Notify("Logged via MCP: " + result.Applied[0]);
-        else if (result.Applied.Count > 1) Notify($"Logged via MCP: {result.Applied.Count} entries — " + string.Join("; ", result.Applied));
-        foreach (var rejected in result.Rejected) Notify("Couldn't log an MCP request (" + rejected + ").");
+        if (result.Applied.Count == 1) Notify("Via MCP: " + result.Applied[0]);
+        else if (result.Applied.Count > 1) Notify($"Via MCP: {result.Applied.Count} changes — " + string.Join("; ", result.Applied));
+        foreach (var rejected in result.Rejected) Notify("Couldn't apply an MCP request (" + rejected + ").");
+        if (result.Unsupported.Count > 0 && _unsupportedSeen.Add(string.Join("|", result.Unsupported)))
+            Notify($"{result.Unsupported.Count} MCP request(s) need a newer version of CalTrack — they'll apply after you update (Settings → Check for updates).");
         return result.Applied.Count > 0 || result.Rejected.Count > 0;
     }
 

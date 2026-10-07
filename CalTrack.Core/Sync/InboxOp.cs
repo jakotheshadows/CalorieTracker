@@ -14,6 +14,7 @@ public class InboxOp
 {
     public const string LogFood = "log_food";
     public const string LogAdHoc = "log_adhoc";
+    public const string AddItem = "add_item";
 
     /// <summary>Unique per op; the idempotency key recorded in <see cref="AppData.ProcessedOpIds"/>.</summary>
     public string Id { get; set; } = "";
@@ -36,6 +37,9 @@ public class InboxOp
 
     /// <summary><see cref="LogAdHoc"/>: the one-off item.</summary>
     public FoodItem? AdHoc { get; set; }
+
+    /// <summary><see cref="AddItem"/>: the new menu item.</summary>
+    public FoodItem? Item { get; set; }
 
     /// <summary>Who asked for it, e.g. "mcp"; shown when the app reports what landed.</summary>
     public string? Source { get; set; }

@@ -1,4 +1,5 @@
 using CalorieTracker.Services;
+using CalorieTracker.Usda;
 using Microsoft.AspNetCore.Components;
 
 namespace CalorieTracker.Components;
@@ -143,15 +144,6 @@ public partial class UsdaPanel
         await OnApplied.InvokeAsync(new UsdaApplied(_selected, _servAmount, _servUnit, baseAmount.Value, text));
     }
 
-    private string ServingText(double baseAmount)
-    {
-        var food = _selected!;
-        // The unmodified label serving keeps its household text, e.g. "0.5 cup (113 g)".
-        if (food.LabelServingAmount is not null && _servUnit == food.BaseUnit &&
-            Math.Abs(_servAmount - food.LabelServingAmount.Value) < 0.001)
-            return food.DefaultServingDisplay;
-        return _servUnit == food.BaseUnit
-            ? $"{_servAmount:0.##} {_servUnit}"
-            : $"{_servAmount:0.##} {_servUnit} ({baseAmount:0.#} {food.BaseUnit})";
-    }
+    // Shared with the MCP server (CalTrack.Core), so items added either way read the same.
+    private string ServingText(double baseAmount) => _selected!.ServingText(_servAmount, _servUnit, baseAmount);
 }

@@ -39,6 +39,14 @@ public class AppData
     /// </summary>
     public List<string> ProcessedOpIds { get; set; } = new();
 
+    /// <summary>
+    /// The inbox op kinds the app that last saved this data understands. Outside writers
+    /// check it before queuing a newer kind: an older app can't apply it, and must not be
+    /// handed one. Older app versions drop this field when they save, which correctly
+    /// reads as "doesn't understand anything new".
+    /// </summary>
+    public List<string> InboxKinds { get; set; } = new();
+
     public static string DayKey(DateOnly d) => d.ToString("yyyy-MM-dd");
 }
 
