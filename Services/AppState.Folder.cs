@@ -261,13 +261,80 @@ public partial class AppState
         // Advertise what this build can apply, so outside writers never queue an op kind
         // the app would have to throw away (see Inbox.AppUnderstands).
         Data.InboxKinds = Inbox.SupportedKinds.ToList();
+        Data.RequestKinds = AppRequests.SupportedKinds.ToList();
         var json = AppDataJson.Serialize(Data, indented: true);
         _lastSeen = await folder.WriteFileAsync(Inbox.MainFileName, json);
         _lastText = json;
     }
 
     /// <summary>True when the saved file doesn't yet advertise everything this build supports.</summary>
-    private bool AdvertisesStaleKinds() => !Data.InboxKinds.ToHashSet().SetEquals(Inbox.SupportedKinds);
+    private bool AdvertisesStaleKinds() =>
+        !Data.InboxKinds.ToHashSet().SetEquals(Inbox.SupportedKinds) ||
+        !Data.RequestKinds.ToHashSet().SetEquals(AppRequests.SupportedKinds);
+
+    // ---------- Requests (the app's API for the MCP server) ----------
+
+    private bool _servingRequests;
+
+    /// <summary>
+    /// Answer pending requests from requests/. Runs outside the folder gate, so a slow USDA
+    /// call never holds up saving the user's edits; it touches no data, only the request
+    /// and response files.
+    /// </summary>
+    private async Task ServeRequestsAsync()
+    {
+        if (_servingRequests) return;
+        _servingRequests = true;
+        try
+        {
+            var files = await folder.ListDirAsync(AppRequests.RequestsDir);
+            foreach (var f in files.OrderBy(f => f.Name, StringComparer.Ordinal))
+            {
+                var request = AppRequests.TryParseRequest(f.Text);
+                // Unreadable, or its asker already gave up: nothing useful to send back.
+                if (request is not null && !AppRequests.IsExpired(request, DateTime.UtcNow))
+                {
+                    var response = await AnswerAsync(request);
+                    await folder.WriteFileInAsync(AppRequests.ResponsesDir, AppRequests.FileNameFor(request.Id), AppRequests.Serialize(response));
+                }
+                await folder.DeleteInAsync(AppRequests.RequestsDir, new[] { f.Name });
+            }
+        }
+        catch
+        {
+            // Folder briefly unavailable: the asker times out with an explanation; next tick retries.
+        }
+        finally
+        {
+            _servingRequests = false;
+        }
+    }
+
+    private async Task<AppResponse> AnswerAsync(AppRequest request)
+    {
+        var response = new AppResponse { Id = request.Id };
+        switch (request.Kind)
+        {
+            case AppRequest.UsdaSearch:
+            {
+                var (results, error) = await usda.SearchAsync(request.Query ?? "", Math.Clamp(request.Max, 1, 15));
+                response.Error = error;
+                if (results is not null) response.Foods = results;
+                break;
+            }
+            case AppRequest.UsdaFood:
+            {
+                var (food, error) = await usda.GetFoodAsync(request.FdcId);
+                response.Error = error;
+                if (food is not null) response.Foods.Add(food);
+                break;
+            }
+            default:
+                response.Error = $"This version of CalTrack doesn't understand \"{request.Kind}\" requests.";
+                break;
+        }
+        return response;
+    }
 
     private async Task<string> SaveAsideAsync(string reason, string text)
     {
@@ -292,7 +359,10 @@ public partial class AppState
     {
         // Busy (a save or another tick in flight): skip, the next tick catches up. The async
         // form, because synchronous waits are unsupported on the browser runtime.
-        if (Folder != FolderState.Connected || !await _folderGate.WaitAsync(0)) return;
+        if (Folder != FolderState.Connected) return;
+        // Requests touch no data, so they're served whether or not a save holds the gate.
+        _ = ServeRequestsAsync();
+        if (!await _folderGate.WaitAsync(0)) return;
         var changed = false;
         try
         {

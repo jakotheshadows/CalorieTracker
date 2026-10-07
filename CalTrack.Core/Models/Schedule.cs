@@ -47,6 +47,12 @@ public class AppData
     /// </summary>
     public List<string> InboxKinds { get; set; } = new();
 
+    /// <summary>
+    /// The request kinds (see CalorieTracker.Sync.AppRequest) the app that last saved this
+    /// data answers — e.g. USDA lookups made with the key only the app holds.
+    /// </summary>
+    public List<string> RequestKinds { get; set; } = new();
+
     public static string DayKey(DateOnly d) => d.ToString("yyyy-MM-dd");
 }
 

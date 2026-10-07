@@ -907,13 +907,41 @@ window.calTracker = {
             return n;
         },
 
-        // Poll while the page is visible (and immediately on refocus), so an entry logged
-        // over MCP shows up within ~2s while the app is open.
+        // Generic subfolder I/O for the request/response channel (requests/, responses/).
+        listDir: async function (dirName) {
+            const sub = await this.dir.getDirectoryHandle(dirName, { create: true });
+            const out = [];
+            for await (const [name, h] of sub.entries()) {
+                if (h.kind !== "file" || name.startsWith(".") || !name.toLowerCase().endsWith(".json")) continue;
+                try { out.push({ name, text: await (await h.getFile()).text() }); } catch { /* vanished mid-list */ }
+            }
+            return out;
+        },
+
+        // Chromium's swap-file write makes the finished file appear atomically under its name.
+        writeFileIn: async function (dirName, name, text) {
+            const sub = await this.dir.getDirectoryHandle(dirName, { create: true });
+            const fh = await sub.getFileHandle(name, { create: true });
+            const w = await fh.createWritable();
+            try { await w.write(text); } catch (e) { try { await w.abort(); } catch { } throw e; }
+            await w.close();
+        },
+
+        deleteIn: async function (dirName, names) {
+            const sub = await this.dir.getDirectoryHandle(dirName, { create: true });
+            for (const name of names) { try { await sub.removeEntry(name); } catch { /* already gone */ } }
+        },
+
+        // Poll every 2s (and immediately on refocus), so an entry logged over MCP shows up
+        // quickly and the server's requests (USDA lookups with the key only the app holds)
+        // get answered. This keeps running in the background too: the server may be
+        // waiting on an answer while CalTrack sits behind Claude; the browser throttles
+        // background timers on its own.
         startWatch: function (dotnetRef) {
             this.stopWatch();
             this.dotnet = dotnetRef;
             const tick = () => {
-                if (!document.hidden && this.dotnet)
+                if (this.dotnet)
                     this.dotnet.invokeMethodAsync("OnFolderTick").catch(() => { });
             };
             this.timer = setInterval(tick, 2000);

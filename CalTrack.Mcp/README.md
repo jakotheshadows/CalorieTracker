@@ -42,10 +42,9 @@ claude mcp add caltrack -- ~/caltrack-mcp/caltrack-mcp --data-dir ~/Documents/Ca
 
 (`CALTRACK_DATA_DIR` works instead of `--data-dir`.)
 
-**Optional — your own USDA key.** `search_usda` / `add_menu_item` use USDA FoodData Central.
-Without a key the server uses api.data.gov's shared `DEMO_KEY` (about 10 requests an hour);
-get a free key at [api.data.gov/signup](https://api.data.gov/signup/) and add
-`"env": { "USDA_API_KEY": "your-key" }` to the server entry (or pass `--usda-key`).
+The server needs no USDA key. `search_usda` and `add_menu_item` ask the CalTrack app to do
+the lookup with the key you saved in its Settings — so for those two, CalTrack must be open
+in the browser. Logging and reading your day work whether it's open or not.
 
 ## Tools
 
@@ -55,7 +54,7 @@ get a free key at [api.data.gov/signup](https://api.data.gov/signup/) and add
 | `get_day` | One day's entries and totals, including ones queued but not yet seen by the app. |
 | `log_food` | Log servings of a **menu** item. Unknown names fail with the closest real names. |
 | `log_adhoc` | Log a one-off food with nutrition the user gave. Refuses foods that are on the menu. |
-| `search_usda` | Search USDA FoodData Central for a food's nutrition. |
+| `search_usda` | Search USDA FoodData Central for a food's nutrition (via the open CalTrack app). |
 | `add_menu_item` | Add a food to the menu — by USDA id (the server fetches the numbers itself, at the label serving or USDA's household portion), or with numbers the user gave. |
 
 Dates are `yyyy-MM-dd`, `today` or `yesterday`, in the user's local time zone.
@@ -80,6 +79,13 @@ test asserts the two agree.
 nutrition values: the server fetches the record and builds the item itself, so the numbers
 can't be misremembered or invented on the way. The item's description links to its USDA
 record. USDA values can't be overridden in the same call.
+
+**The app's API is the folder.** A browser app can't accept connections, so anything only
+the app can do — chiefly USDA lookups with the key it keeps in the browser — is asked through
+the folder: the server drops `requests/<id>.json`, the app answers in
+`responses/<id>.json`, the server collects it. The app advertises which requests it answers;
+a request nobody answers in 20 seconds is withdrawn with an "open CalTrack" error rather than
+left to be answered into the void.
 
 **Old app versions can't lose new ops.** The app records the op kinds it understands in the
 data file; the server won't queue a newer kind (like `add_item`) until the app says it can

@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text.Json;
 using CalorieTracker.Data;
 using CalorieTracker.Models;
@@ -17,7 +16,7 @@ public sealed class UsdaMenuTests : IDisposable
 
     private readonly string _dir = Directory.CreateTempSubdirectory("caltrack-usda-test-").FullName;
     private readonly DataFolderStore _store;
-    private readonly FakeUsda _http = new();
+    private readonly FakeApp _app;
     private string MainPath => Path.Combine(_dir, Inbox.MainFileName);
     private string InboxDir => Path.Combine(_dir, Inbox.DirName);
 
@@ -25,13 +24,20 @@ public sealed class UsdaMenuTests : IDisposable
     {
         _store = new DataFolderStore(_dir);
         var data = InboxTests.Menu();
-        data.InboxKinds = Inbox.SupportedKinds.ToList(); // an up-to-date app saved this
+        // An up-to-date app saved this: it applies add_item and answers USDA requests.
+        data.InboxKinds = Inbox.SupportedKinds.ToList();
+        data.RequestKinds = AppRequests.SupportedKinds.ToList();
         WriteMain(data);
+        _app = new FakeApp(_dir);
     }
 
-    public void Dispose() => Directory.Delete(_dir, recursive: true);
+    public void Dispose()
+    {
+        _app.Dispose();
+        Directory.Delete(_dir, recursive: true);
+    }
 
-    private UsdaGateway Usda(string? key = "test-key") => new(new HttpClient(_http), key);
+    private UsdaGateway Usda(double timeoutSeconds = 5) => new(_store, TimeSpan.FromSeconds(timeoutSeconds));
 
     private void WriteMain(AppData data) => File.WriteAllText(MainPath, AppDataJson.Serialize(data, indented: true));
 
@@ -144,7 +150,7 @@ public sealed class UsdaMenuTests : IDisposable
 
         Assert.Contains("update it", ex.Message);
         Assert.Equal(0, InboxCount());
-        Assert.Equal(0, _http.Requests); // refused before spending a USDA request
+        Assert.Equal(0, _app.Answered); // refused before asking the app anything
     }
 
     [Fact]
@@ -206,7 +212,7 @@ public sealed class UsdaMenuTests : IDisposable
     {
         var usda = Usda();
         await CalTrackTools.SearchUsda(usda, "ice cream sandwich");
-        _http.FailDetail = HttpStatusCode.InternalServerError;
+        _app.FailFood = "USDA API error (HTTP 500).";
 
         var result = JsonDocument.Parse(await CalTrackTools.AddMenuItem(_store, usda, usdaFdcId: 172226, name: "Ice cream sandwich")).RootElement;
 
@@ -215,12 +221,45 @@ public sealed class UsdaMenuTests : IDisposable
     }
 
     [Fact]
-    public async Task Hitting_the_demo_key_limit_explains_how_to_fix_it()
+    public async Task The_server_holds_no_key_and_relays_the_apps_own_errors()
     {
-        _http.FailSearch = (HttpStatusCode)429;
-        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(key: null), "anything"));
-        Assert.Contains("DEMO_KEY", ex.Message);
-        Assert.Contains("USDA_API_KEY", ex.Message);
+        _app.FailSearch = "No API key configured. Add one in Settings.";
+        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(), "anything"));
+        Assert.Equal("CalTrack: No API key configured. Add one in Settings.", ex.Message);
+    }
+
+    [Fact]
+    public async Task With_CalTrack_closed_lookups_fail_clearly_and_leave_nothing_behind()
+    {
+        _app.Dispose(); // nobody answering
+        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(timeoutSeconds: 1), "ice cream sandwich"));
+        Assert.Contains("open CalTrack", ex.Message);
+        Assert.Empty(Directory.GetFiles(Path.Combine(_dir, AppRequests.RequestsDir))); // request withdrawn
+    }
+
+    [Fact]
+    public async Task An_app_that_cannot_answer_is_not_asked()
+    {
+        var data = ReadMain();
+        data.RequestKinds.Clear(); // saved by a version without the request channel
+        WriteMain(data);
+
+        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(), "ice cream sandwich"));
+        Assert.Contains("update it", ex.Message);
+        Assert.False(Directory.Exists(Path.Combine(_dir, AppRequests.RequestsDir)));
+    }
+
+    [Fact]
+    public void Requests_and_responses_round_trip_and_expire()
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(Fixtures, "usda-food-172226.json")));
+        var food = UsdaClient.ParseDetailFood(doc.RootElement);
+        var back = AppRequests.TryParseResponse(AppRequests.Serialize(new AppResponse { Id = "x", Foods = { food } }))!;
+        Assert.Equal(new UsdaPortion("1 serving", 70), Assert.Single(back.Foods).Portions.Single());
+        Assert.Equal(237, back.Foods[0].CaloriesPer100);
+
+        var request = new AppRequest { Id = "r", Kind = AppRequest.UsdaSearch, CreatedUtc = DateTime.UtcNow.AddSeconds(-30), TimeoutSeconds = 20 };
+        Assert.True(AppRequests.IsExpired(request, DateTime.UtcNow)); // asker gave up: the app skips it
     }
 
     private static InboxOp AddOp(string name, double calories) => new()
@@ -231,28 +270,74 @@ public sealed class UsdaMenuTests : IDisposable
         Item = new FoodItem { Name = name, Calories = calories, ServingSize = "1 serving (70 g)" },
     };
 
-    /// <summary>Serves the captured USDA responses; failures can be switched on per endpoint.</summary>
-    private sealed class FakeUsda : HttpMessageHandler
+    /// <summary>
+    /// Stands in for the CalTrack app's side of the request channel: watches requests/,
+    /// answers from the captured USDA responses, writes responses/ and removes the request —
+    /// what AppState.ServeRequestsAsync does with the user's key.
+    /// </summary>
+    private sealed class FakeApp : IDisposable
     {
-        public int Requests;
-        public HttpStatusCode? FailSearch;
-        public HttpStatusCode? FailDetail;
+        private readonly CancellationTokenSource _stop = new();
+        private readonly Task _loop;
+        public int Answered;
+        public string? FailSearch;
+        public string? FailFood;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        public FakeApp(string root)
         {
-            Requests++;
-            var path = request.RequestUri!.AbsolutePath;
-            if (path.EndsWith("/foods/search"))
-                return Respond(FailSearch, "usda-search-ice-cream-sandwich.json");
-            if (path.EndsWith("/food/172226"))
-                return Respond(FailDetail, "usda-food-172226.json");
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            var requests = Path.Combine(root, AppRequests.RequestsDir);
+            var responses = Path.Combine(root, AppRequests.ResponsesDir);
+            _loop = Task.Run(async () =>
+            {
+                while (!_stop.IsCancellationRequested)
+                {
+                    if (Directory.Exists(requests))
+                        foreach (var path in Directory.GetFiles(requests, "*.json"))
+                        {
+                            var request = AppRequests.TryParseRequest(File.ReadAllText(path));
+                            if (request is null) continue;
+                            Directory.CreateDirectory(responses);
+                            File.WriteAllText(Path.Combine(responses, AppRequests.FileNameFor(request.Id)), AppRequests.Serialize(Answer(request)));
+                            File.Delete(path);
+                            Interlocked.Increment(ref Answered);
+                        }
+                    try { await Task.Delay(25, _stop.Token); } catch (OperationCanceledException) { }
+                }
+            });
         }
 
-        private static Task<HttpResponseMessage> Respond(HttpStatusCode? fail, string fixture) =>
-            Task.FromResult(fail is { } code
-                ? new HttpResponseMessage(code)
-                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(File.ReadAllText(Path.Combine(Fixtures, fixture))) });
+        private AppResponse Answer(AppRequest r)
+        {
+            var response = new AppResponse { Id = r.Id };
+            if (r.Kind == AppRequest.UsdaSearch)
+            {
+                if ((response.Error = FailSearch) is null)
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(Fixtures, "usda-search-ice-cream-sandwich.json")));
+                    response.Foods = doc.RootElement.GetProperty("foods").EnumerateArray().Select(UsdaClient.ParseSearchFood).Take(r.Max).ToList();
+                }
+            }
+            else if (r.Kind == AppRequest.UsdaFood)
+            {
+                if ((response.Error = FailFood) is null)
+                {
+                    if (r.FdcId != 172226) response.Error = $"USDA has no food with id {r.FdcId}.";
+                    else
+                    {
+                        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(Fixtures, "usda-food-172226.json")));
+                        response.Foods.Add(UsdaClient.ParseDetailFood(doc.RootElement));
+                    }
+                }
+            }
+            return response;
+        }
+
+        public void Dispose()
+        {
+            if (_stop.IsCancellationRequested) return;
+            _stop.Cancel();
+            _loop.Wait();
+        }
     }
 
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider

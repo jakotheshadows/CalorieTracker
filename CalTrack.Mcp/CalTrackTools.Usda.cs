@@ -20,6 +20,7 @@ public static partial class CalTrackTools
     [Description(
         "Search USDA FoodData Central for a food's nutrition. Use it when the user mentions a food that isn't " +
         "on their menu, then add the best match with add_menu_item (by fdcId) so its numbers come from USDA. " +
+        "The search runs in the CalTrack app with the user's USDA key, so CalTrack must be open. " +
         "Prefer a generic entry unless the user named a brand; if the right match isn't clear, show the user " +
         "the options instead of picking.")]
     public static async Task<string> SearchUsda(
@@ -50,9 +51,6 @@ public static partial class CalTrackTools
             }),
             note = "Nutrition is per the listed serving: the package label for branded foods, 100 g for generic " +
                    "ones. add_menu_item uses USDA's household portions for generic foods (e.g. \"1 sandwich\").",
-            keyNote = usda.UsingDemoKey
-                ? "Using api.data.gov's shared DEMO_KEY (about 10 USDA requests an hour); the user can set their own USDA_API_KEY."
-                : null,
         });
     }
 

@@ -84,6 +84,52 @@ public sealed class DataFolderStore(string? root)
         return final;
     }
 
+    // ---------- requests to the app (its API; see AppRequest) ----------
+
+    /// <summary>Ask the app something: atomic create-then-rename into requests/.</summary>
+    public void WriteRequest(AppRequest request)
+    {
+        var dir = Path.Combine(RequireRoot(), AppRequests.RequestsDir);
+        Directory.CreateDirectory(dir);
+        var tmp = Path.Combine(dir, $".{request.Id}.tmp");
+        using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            fs.Write(new UTF8Encoding(false).GetBytes(AppRequests.Serialize(request)));
+            fs.Flush(flushToDisk: true);
+        }
+        File.Move(tmp, Path.Combine(dir, AppRequests.FileNameFor(request.Id)));
+    }
+
+    /// <summary>The app's answer if it has arrived (and is complete), removing it; else null.</summary>
+    public AppResponse? TryTakeResponse(string id)
+    {
+        var path = Path.Combine(RequireRoot(), AppRequests.ResponsesDir, AppRequests.FileNameFor(id));
+        var text = ReadShared(path);
+        if (text is null || AppRequests.TryParseResponse(text) is not { } response) return null;
+        try { File.Delete(path); } catch (IOException) { /* app still closing it; orphan cleanup gets it */ }
+        return response;
+    }
+
+    /// <summary>Withdraw an unanswered request, so the app doesn't answer into the void later.</summary>
+    public void WithdrawRequest(string id)
+    {
+        try { File.Delete(Path.Combine(RequireRoot(), AppRequests.RequestsDir, AppRequests.FileNameFor(id))); }
+        catch (IOException) { /* being answered right now; the orphan sweep removes the answer */ }
+    }
+
+    /// <summary>Remove answers nobody collected (their asker timed out) once they're old.</summary>
+    public void SweepOrphanResponses(TimeSpan olderThan)
+    {
+        var dir = Path.Combine(RequireRoot(), AppRequests.ResponsesDir);
+        if (!Directory.Exists(dir)) return;
+        foreach (var path in Directory.EnumerateFiles(dir))
+            try
+            {
+                if (DateTime.UtcNow - File.GetLastWriteTimeUtc(path) > olderThan) File.Delete(path);
+            }
+            catch (IOException) { /* in use: next sweep */ }
+    }
+
     private static (long Ticks, long Length)? Stamp(string path)
     {
         var info = new FileInfo(path);

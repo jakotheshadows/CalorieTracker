@@ -16,13 +16,12 @@ var dataDir = ArgValue(args, "--data-dir") ?? Environment.GetEnvironmentVariable
 builder.Services.AddSingleton(new DataFolderStore(dataDir));
 builder.Services.AddSingleton(TimeProvider.System);
 
-// USDA FoodData Central key (free at https://api.data.gov/signup). Without one the server
-// uses the shared DEMO_KEY, which works but is limited to ~10 requests an hour.
-var usdaKey = ArgValue(args, "--usda-key") ?? Environment.GetEnvironmentVariable("USDA_API_KEY");
-builder.Services.AddSingleton(new UsdaGateway(new HttpClient { Timeout = TimeSpan.FromSeconds(20) }, usdaKey));
+// USDA lookups are asked of the CalTrack app through the data folder; the app holds the
+// user's USDA key, so the server has none.
+builder.Services.AddSingleton(sp => new UsdaGateway(sp.GetRequiredService<DataFolderStore>()));
 
 builder.Services
-    .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = "0.2.0" })
+    .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = "0.3.0" })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
 

@@ -48,11 +48,19 @@ public class UsdaService(LocalStore store, HttpClient http)
 
     // ---------- Search ----------
 
-    public async Task<(List<UsdaFood>? Results, string? Error)> SearchAsync(string query)
+    public async Task<(List<UsdaFood>? Results, string? Error)> SearchAsync(string query, int pageSize = 12)
     {
         var key = await GetApiKeyAsync();
         if (key is null) return (null, "No API key configured. Add one in Settings.");
-        return await UsdaClient.SearchAsync(http, key, query, 12, KeyHint);
+        return await UsdaClient.SearchAsync(http, key, query, pageSize, KeyHint);
+    }
+
+    /// <summary>One food by FDC id, with its household portions ("1 serving" = 70 g).</summary>
+    public async Task<(UsdaFood? Food, string? Error)> GetFoodAsync(int fdcId)
+    {
+        var key = await GetApiKeyAsync();
+        if (key is null) return (null, "No API key configured. Add one in Settings.");
+        return await UsdaClient.GetFoodAsync(http, key, fdcId, KeyHint);
     }
 
     /// <summary>Look up a scanned/typed GTIN/UPC. Matches on FDC's gtinUpc, ignoring leading zeros.</summary>

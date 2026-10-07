@@ -40,6 +40,15 @@ public class DataFolder(IJSRuntime js)
     public ValueTask<int> DeleteInboxAsync(IEnumerable<string> names) =>
         js.InvokeAsync<int>("calTracker.dataFolder.deleteInbox", names);
 
+    public ValueTask<InboxEntry[]> ListDirAsync(string dirName) =>
+        js.InvokeAsync<InboxEntry[]>("calTracker.dataFolder.listDir", dirName);
+
+    public ValueTask WriteFileInAsync(string dirName, string name, string text) =>
+        js.InvokeVoidAsync("calTracker.dataFolder.writeFileIn", dirName, name, text);
+
+    public ValueTask DeleteInAsync(string dirName, IEnumerable<string> names) =>
+        js.InvokeVoidAsync("calTracker.dataFolder.deleteIn", dirName, names);
+
     public ValueTask StartWatchAsync<T>(DotNetObjectReference<T> target) where T : class =>
         js.InvokeVoidAsync("calTracker.dataFolder.startWatch", target);
 
