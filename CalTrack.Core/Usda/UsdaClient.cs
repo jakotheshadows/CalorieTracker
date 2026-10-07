@@ -6,8 +6,10 @@ namespace CalorieTracker.Usda;
 
 /// <summary>
 /// USDA FoodData Central API (https://fdc.nal.usda.gov). Stateless: callers supply the
-/// HttpClient and the api.data.gov key — the app keeps the key in browser storage, the MCP
-/// server in its config. Errors come back as user-facing text, never exceptions.
+/// HttpClient and the api.data.gov key, which only the app holds (browser storage). The MCP
+/// server has no key: it asks the app to fetch a <see cref="SearchPath"/> / <see cref="FoodPath"/>
+/// and reads the raw reply with <see cref="ReadSearch"/> / <see cref="ReadFood"/> — the same
+/// code the app's own lookups go through. Errors come back as user-facing text, never exceptions.
 /// </summary>
 public static class UsdaClient
 {
@@ -31,17 +33,35 @@ public static class UsdaClient
         ["328"] = "vitaminD",
     };
 
+    // ---------- Requests: a path under the API root, without the key ----------
+    // The app fetches these for the MCP server and refuses any other shape, so keep them in
+    // step with ALLOWED in wwwroot/js/request-worker.js.
+
+    /// <summary>A text search over the generic and branded data types.</summary>
+    public static string SearchPath(string query, int pageSize) =>
+        "foods/search" +
+        $"?query={Uri.EscapeDataString(query.Trim())}" +
+        $"&pageSize={pageSize}" +
+        "&dataType=" + Uri.EscapeDataString("Branded,Foundation,SR Legacy");
+
+    /// <summary>
+    /// One food by id, from the per-food endpoint — the only one that carries household
+    /// portions ("1 sandwich" = 59 g), which search results leave out.
+    /// </summary>
+    public static string FoodPath(int fdcId) => $"food/{fdcId}";
+
+    /// <summary>The full URL for a path, with the key.</summary>
+    public static string Url(string path, string key) =>
+        Api + path + (path.Contains('?') ? "&" : "?") + "api_key=" + Uri.EscapeDataString(key);
+
+    // ---------- Replies: HTTP status + body → foods, or a user-facing error ----------
+
+    /// <param name="status">HTTP status; 0 when USDA couldn't be reached at all.</param>
+    /// <param name="body">The reply's text.</param>
     /// <param name="keyHint">Appended to a rejected-key error: where the user fixes the key.</param>
-    public static async Task<(List<UsdaFood>? Results, string? Error)> SearchAsync(
-        HttpClient http, string key, string query, int pageSize, string keyHint = "")
+    public static (List<UsdaFood>? Results, string? Error) ReadSearch(int status, string? body, string keyHint = "")
     {
-        if (string.IsNullOrWhiteSpace(query)) return (new List<UsdaFood>(), null);
-        var url = Api + "foods/search" +
-                  $"?api_key={Uri.EscapeDataString(key)}" +
-                  $"&query={Uri.EscapeDataString(query.Trim())}" +
-                  $"&pageSize={pageSize}" +
-                  "&dataType=" + Uri.EscapeDataString("Branded,Foundation,SR Legacy");
-        var (doc, error) = await GetJsonAsync(http, url, keyHint);
+        var (doc, error) = Interpret(status, body, keyHint);
         if (doc is null) return (null, error);
         using (doc)
         {
@@ -53,17 +73,22 @@ public static class UsdaClient
         }
     }
 
-    /// <summary>
-    /// One food by id, from the per-food endpoint — the only one that carries household
-    /// portions ("1 sandwich" = 59 g), which search results leave out.
-    /// </summary>
-    public static async Task<(UsdaFood? Food, string? Error)> GetFoodAsync(
-        HttpClient http, string key, int fdcId, string keyHint = "")
+    /// <inheritdoc cref="ReadSearch"/>
+    public static (UsdaFood? Food, string? Error) ReadFood(int status, string? body, int fdcId, string keyHint = "")
     {
-        var url = Api + $"food/{fdcId}?api_key={Uri.EscapeDataString(key)}";
-        var (doc, error) = await GetJsonAsync(http, url, keyHint, notFound: $"USDA has no food with id {fdcId}.");
+        var (doc, error) = Interpret(status, body, keyHint, notFound: $"USDA has no food with id {fdcId}.");
         if (doc is null) return (null, error);
         using (doc) return (ParseDetailFood(doc.RootElement), null);
+    }
+
+    // ---------- The app's own lookups (it holds the key) ----------
+
+    public static async Task<(List<UsdaFood>? Results, string? Error)> SearchAsync(
+        HttpClient http, string key, string query, int pageSize, string keyHint = "")
+    {
+        if (string.IsNullOrWhiteSpace(query)) return (new List<UsdaFood>(), null);
+        var (status, body) = await GetAsync(http, Url(SearchPath(query, pageSize), key));
+        return ReadSearch(status, body, keyHint);
     }
 
     /// <summary>Look up a scanned/typed GTIN/UPC. Matches on FDC's gtinUpc, ignoring leading zeros.</summary>
@@ -136,25 +161,38 @@ public static class UsdaClient
         return (char)('0' + (10 - sum % 10) % 10);
     }
 
-    private static async Task<(JsonDocument? Doc, string? Error)> GetJsonAsync(
-        HttpClient http, string url, string keyHint, string? notFound = null)
+    private static async Task<(int Status, string? Body)> GetAsync(HttpClient http, string url)
     {
         try
         {
             using var resp = await http.GetAsync(url);
-            if (resp.StatusCode == HttpStatusCode.Forbidden)
-                return (null, ("The USDA API rejected the key (HTTP 403). " + keyHint).Trim());
-            if ((int)resp.StatusCode == 429)
-                return (null, "Rate limit reached for this key — try again in a bit.");
-            if (resp.StatusCode == HttpStatusCode.NotFound && notFound is not null)
-                return (null, notFound);
-            if (!resp.IsSuccessStatusCode)
-                return (null, $"USDA API error (HTTP {(int)resp.StatusCode}).");
-            return (JsonDocument.Parse(await resp.Content.ReadAsStringAsync()), null);
+            return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync());
         }
         catch (Exception)
         {
+            return (0, null);
+        }
+    }
+
+    private static (JsonDocument? Doc, string? Error) Interpret(int status, string? body, string keyHint, string? notFound = null)
+    {
+        if (status == 0)
             return (null, "Couldn't reach the USDA API — are you offline?");
+        if (status == (int)HttpStatusCode.Forbidden)
+            return (null, ("The USDA API rejected the key (HTTP 403). " + keyHint).Trim());
+        if (status == 429)
+            return (null, "Rate limit reached for this key — try again in a bit.");
+        if (status == (int)HttpStatusCode.NotFound && notFound is not null)
+            return (null, notFound);
+        if (status is < 200 or > 299)
+            return (null, $"USDA API error (HTTP {status}).");
+        try
+        {
+            return (JsonDocument.Parse(body ?? ""), null);
+        }
+        catch (JsonException)
+        {
+            return (null, "The USDA API sent a reply that couldn't be read.");
         }
     }
 

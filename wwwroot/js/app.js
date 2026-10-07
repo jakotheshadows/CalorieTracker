@@ -2,8 +2,8 @@
 window.calTracker = {
     storage: {
         get: (key) => localStorage.getItem(key),
-        set: (key, value) => localStorage.setItem(key, value),
-        remove: (key) => localStorage.removeItem(key),
+        set: (key, value) => { localStorage.setItem(key, value); calTracker.dataFolder.keyChanged(key); },
+        remove: (key) => { localStorage.removeItem(key); calTracker.dataFolder.keyChanged(key); },
     },
 
     // Service-worker update handling: detect a freshly installed new version,
@@ -795,8 +795,10 @@ window.calTracker = {
         dotnet: null,
         timer: null,
         onWake: null,
+        worker: null,
         MAIN: "caltrack-data.json",
         INBOX: "inbox",
+        USDA_KEY: "caltrack-usda-api-key", // UsdaService.ApiKeyStorageKey
 
         // Feature detection, not browser sniffing: Safari and Firefox (and Brave by
         // default) don't expose the directory picker. OPFS exists there, but it's a
@@ -907,36 +909,11 @@ window.calTracker = {
             return n;
         },
 
-        // Generic subfolder I/O for the request/response channel (requests/, responses/).
-        listDir: async function (dirName) {
-            const sub = await this.dir.getDirectoryHandle(dirName, { create: true });
-            const out = [];
-            for await (const [name, h] of sub.entries()) {
-                if (h.kind !== "file" || name.startsWith(".") || !name.toLowerCase().endsWith(".json")) continue;
-                try { out.push({ name, text: await (await h.getFile()).text() }); } catch { /* vanished mid-list */ }
-            }
-            return out;
-        },
-
-        // Chromium's swap-file write makes the finished file appear atomically under its name.
-        writeFileIn: async function (dirName, name, text) {
-            const sub = await this.dir.getDirectoryHandle(dirName, { create: true });
-            const fh = await sub.getFileHandle(name, { create: true });
-            const w = await fh.createWritable();
-            try { await w.write(text); } catch (e) { try { await w.abort(); } catch { } throw e; }
-            await w.close();
-        },
-
-        deleteIn: async function (dirName, names) {
-            const sub = await this.dir.getDirectoryHandle(dirName, { create: true });
-            for (const name of names) { try { await sub.removeEntry(name); } catch { /* already gone */ } }
-        },
-
         // Poll every 2s (and immediately on refocus), so an entry logged over MCP shows up
-        // quickly and the server's requests (USDA lookups with the key only the app holds)
-        // get answered. This keeps running in the background too: the server may be
-        // waiting on an answer while CalTrack sits behind Claude; the browser throttles
-        // background timers on its own.
+        // quickly. In the background the browser stretches this to about once a minute,
+        // which is fine for folding in entries — but not for the MCP server's USDA requests,
+        // which it waits on: those are answered by a worker (request-worker.js), whose
+        // timers aren't throttled.
         startWatch: function (dotnetRef) {
             this.stopWatch();
             this.dotnet = dotnetRef;
@@ -948,6 +925,11 @@ window.calTracker = {
             this.onWake = () => tick();
             document.addEventListener("visibilitychange", this.onWake);
             window.addEventListener("focus", this.onWake);
+            try {
+                this.worker = new Worker("js/request-worker.js");
+                this.worker.postMessage({ type: "start", dir: this.dir });
+                this.keyChanged(this.USDA_KEY);
+            } catch { this.worker = null; } // no worker: requests go unanswered and the server says so
         },
 
         stopWatch: function () {
@@ -959,6 +941,17 @@ window.calTracker = {
             }
             this.onWake = null;
             this.dotnet = null;
+            if (this.worker) this.worker.terminate();
+            this.worker = null;
+        },
+
+        // Workers can't read localStorage, so the worker gets the key from here: at start,
+        // when this tab saves it (storage.set/remove), and when another tab does.
+        keyChanged: function (storageKey) {
+            if (!this.worker || (storageKey !== this.USDA_KEY && storageKey !== null)) return;
+            try { this.worker.postMessage({ type: "key", key: localStorage.getItem(this.USDA_KEY) }); } catch { }
         },
     },
 };
+
+window.addEventListener("storage", (e) => calTracker.dataFolder.keyChanged(e.key));

@@ -21,7 +21,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(sp => new UsdaGateway(sp.GetRequiredService<DataFolderStore>()));
 
 builder.Services
-    .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = "0.3.0" })
+    .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = "0.4.0" })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
 

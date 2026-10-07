@@ -9,7 +9,7 @@ namespace CalorieTracker.Services;
 /// nutrition aggregation, and random schedule generation. The data operations themselves
 /// live in CalTrack.Core (AppDataOps) so the MCP server performs the identical logic.
 /// </summary>
-public partial class AppState(LocalStore store, DataFolder folder, UsdaService usda)
+public partial class AppState(LocalStore store, DataFolder folder)
 {
     public const string DataKey = "caltrack-data";
 

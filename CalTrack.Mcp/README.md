@@ -44,7 +44,8 @@ claude mcp add caltrack -- ~/caltrack-mcp/caltrack-mcp --data-dir ~/Documents/Ca
 
 The server needs no USDA key. `search_usda` and `add_menu_item` ask the CalTrack app to do
 the lookup with the key you saved in its Settings — so for those two, CalTrack must be open
-in the browser. Logging and reading your day work whether it's open or not.
+in the browser (in the background is fine) with its data folder connected. Logging and
+reading your day work whether it's open or not.
 
 ## Tools
 
@@ -80,12 +81,21 @@ nutrition values: the server fetches the record and builds the item itself, so t
 can't be misremembered or invented on the way. The item's description links to its USDA
 record. USDA values can't be overridden in the same call.
 
-**The app's API is the folder.** A browser app can't accept connections, so anything only
-the app can do — chiefly USDA lookups with the key it keeps in the browser — is asked through
-the folder: the server drops `requests/<id>.json`, the app answers in
-`responses/<id>.json`, the server collects it. The app advertises which requests it answers;
-a request nobody answers in 20 seconds is withdrawn with an "open CalTrack" error rather than
-left to be answered into the void.
+**The app's API is the folder.** A browser app can't accept connections, so what only the app
+can do — USDA lookups with the key it keeps in the browser — is asked through the folder: the
+server drops `requests/<id>.json` naming a USDA path, the app adds the key, fetches it and
+writes USDA's reply verbatim to `responses/<id>.json`, and the server reads it with the same
+Core code the app's own lookups use. The app only fetches the two shapes Core builds (a
+search, one food), so a stray file can't send the key elsewhere. It advertises which requests
+it answers; a request nobody answers in 20 seconds is withdrawn with an "open CalTrack" error
+rather than left to be answered into the void.
+
+**Answered by a worker, not the page.** The server asks while you're in Claude — CalTrack in
+the background — and browsers throttle a background page's timers to one wake-up a minute
+(Edge after about a minute hidden), far past the server's wait. A dedicated Web Worker's timers
+aren't throttled (measured: every 1.0 s while the page's slowed to once a minute), so a worker
+watches `requests/` and replies in about a second. It stays thin on purpose — a keyed fetch —
+so no lookup logic lives in JavaScript.
 
 **Old app versions can't lose new ops.** The app records the op kinds it understands in the
 data file; the server won't queue a newer kind (like `add_item`) until the app says it can
