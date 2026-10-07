@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Shared by the Blazor app and the MCP server: the data model, its JSON shape, and
+       the data operations both sides perform. One copy of each, so the app and the
+       server cannot drift apart on schema or on what "log a food" means. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>CalorieTracker</RootNamespace>
+  </PropertyGroup>
+
+</Project>

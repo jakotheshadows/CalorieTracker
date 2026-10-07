@@ -13,6 +13,19 @@
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="9.0.10" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- Sibling projects (shared core, MCP server, tests) live under this folder but are
+       separate assemblies: keep their sources out of the app's default globs. -->
+  <ItemGroup>
+    <Compile Remove="CalTrack.*/**" />
+    <Content Remove="CalTrack.*/**" />
+    <None Remove="CalTrack.*/**" />
+    <EmbeddedResource Remove="CalTrack.*/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="CalTrack.Core\CalTrack.Core.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <ServiceWorker Include="wwwroot\service-worker.js" PublishedContent="wwwroot\service-worker.published.js" />
   </ItemGroup>

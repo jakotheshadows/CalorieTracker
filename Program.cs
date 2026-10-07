@@ -9,6 +9,7 @@ builder.RootComponents.Add<HeadOutlet>("head::after");
 
 builder.Services.AddScoped(sp => new HttpClient());
 builder.Services.AddScoped<LocalStore>();
+builder.Services.AddScoped<DataFolder>();
 builder.Services.AddScoped<AppState>();
 builder.Services.AddScoped<UsdaService>();
 

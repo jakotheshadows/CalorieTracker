@@ -3,6 +3,7 @@
 @inject LocalStore Store
 @inject UsdaService Usda
 @inject IJSRuntime JS
+@implements IDisposable
 
 <PageTitle>Settings</PageTitle>
 
@@ -14,9 +15,10 @@
     <div class="card">
         <h3>Backup &amp; sync</h3>
         <p class="muted small">
-            All data lives in this browser's local storage. To back up or move it to another
-            device, export everything (menu items + schedule) as a JSON file and import it there.
-            Keep the file in your own cloud storage (Drive, Dropbox, OneDrive…) to sync between devices.
+            Your data lives in this browser's storage (and in your data folder, if you connect one
+            below). To back up or move it to another device, export everything (menu items +
+            schedule) as a JSON file and import it there. Keep the file in your own cloud storage
+            (Drive, Dropbox, OneDrive…) to sync between devices.
         </p>
 
         @if (_importError is not null)
@@ -35,6 +37,67 @@
                 <InputFile OnChange="ImportAsync" accept=".json,application/json" />
             </label>
         </div>
+    </div>
+
+    <div class="card">
+        <h3>Data folder (Claude / MCP)</h3>
+        @switch (State.Folder)
+        {
+            case FolderState.Unsupported:
+                <p class="muted small">
+                    <b>Not available in this browser.</b> Connecting a data folder relies on the File
+                    System Access API, which Chrome and Edge provide on desktop computers — Safari and
+                    Firefox don't. Everything else in CalTrack works as usual: your data is saved in this
+                    browser, and Export / Import moves it anywhere.
+                </p>
+                break;
+
+            case FolderState.Connected:
+                <p class="muted small folder-status">
+                    <span class="dot dot-ok"></span>
+                    <span>Connected to <b>@State.FolderName</b>.</span>
+                </p>
+                <p class="muted small">
+                    CalTrack saves everything to <code>caltrack-data.json</code> in that folder and picks
+                    up entries logged by the CalTrack MCP server within a couple of seconds.
+                </p>
+                <div class="btn-row">
+                    <ConfirmButton Label="Disconnect folder" OnConfirm="DisconnectFolderAsync" />
+                </div>
+                break;
+
+            case FolderState.NeedsReconnect:
+                <p class="muted small">
+                    CalTrack needs your OK to keep using <b>@State.FolderName</b> — browsers ask again
+                    from time to time. Until then, changes are kept in this browser and catch up when you
+                    reconnect.
+                </p>
+                <div class="btn-row">
+                    <button class="btn btn-accent" disabled="@_folderBusy" @onclick="ReconnectFolderAsync">Reconnect folder</button>
+                    <ConfirmButton Label="Disconnect" OnConfirm="DisconnectFolderAsync" />
+                </div>
+                break;
+
+            default:
+                <p class="muted small">
+                    Also keep your data in a folder on this computer — that's what lets the
+                    <a href="https://github.com/jakotheshadows/CalorieTracker/tree/main/CalTrack.Mcp" target="_blank" rel="noopener">CalTrack MCP server</a>
+                    read your log and add entries when you tell Claude what you ate. Create an empty
+                    folder (for example <code>Documents\CalTrack</code>) and choose it.
+                </p>
+                <div class="btn-row">
+                    <button class="btn btn-accent" disabled="@_folderBusy" @onclick="ConnectFolderAsync">Connect data folder…</button>
+                </div>
+                @if (!_standalone)
+                {
+                    <p class="muted small">Tip: install CalTrack as an app so the browser remembers the folder permission between visits.</p>
+                }
+                break;
+        }
+        @if (_folderError is not null)
+        {
+            <div class="alert-error">@_folderError</div>
+        }
     </div>
 
     <InstallPrompt Compact="true" />

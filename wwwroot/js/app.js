@@ -784,4 +784,153 @@ window.calTracker = {
         a.remove();
         URL.revokeObjectURL(url);
     },
+
+    // Connected data folder (File System Access API): the app's data mirrored to
+    // caltrack-data.json in a folder the user picks, plus an inbox/ of one-file-per-op
+    // changes from outside writers (the MCP server). These are I/O primitives only —
+    // every sync DECISION lives in C# (AppState.Folder.cs + CalTrack.Core's Inbox).
+    dataFolder: {
+        dir: null,
+        loaded: false,
+        dotnet: null,
+        timer: null,
+        onWake: null,
+        MAIN: "caltrack-data.json",
+        INBOX: "inbox",
+
+        // Feature detection, not browser sniffing: Safari and Firefox (and Brave by
+        // default) don't expose the directory picker. OPFS exists there, but it's a
+        // private sandbox no other program can reach, so it can't stand in.
+        supported: function () {
+            return typeof window.showDirectoryPicker === "function" && window.isSecureContext === true;
+        },
+
+        // The directory handle persists in IndexedDB — handles are structured-clonable,
+        // which localStorage can't hold.
+        idb: function (mode, fn) {
+            return new Promise((resolve, reject) => {
+                const open = indexedDB.open("caltrack-fs", 1);
+                open.onupgradeneeded = () => open.result.createObjectStore("handles");
+                open.onerror = () => reject(open.error);
+                open.onsuccess = () => {
+                    const tx = open.result.transaction("handles", mode);
+                    const req = fn(tx.objectStore("handles"));
+                    tx.oncomplete = () => { open.result.close(); resolve(req && req.result); };
+                    tx.onerror = () => { open.result.close(); reject(tx.error); };
+                };
+            });
+        },
+
+        load: async function () {
+            if (this.loaded) return;
+            this.loaded = true;
+            try { this.dir = (await this.idb("readonly", s => s.get("dataDir"))) || null; } catch { this.dir = null; }
+        },
+
+        status: async function () {
+            await this.load();
+            const supported = this.supported();
+            if (!this.dir) return { supported, connected: false, permission: null, name: null };
+            let permission = "prompt";
+            try { permission = await this.dir.queryPermission({ mode: "readwrite" }); } catch { /* keep prompt */ }
+            return { supported, connected: true, permission, name: this.dir.name };
+        },
+
+        // Must run inside a click handler (the picker and permission prompt need a gesture).
+        connect: async function () {
+            if (!this.supported()) return { ok: false, name: null, error: "This browser can't connect a data folder." };
+            let dir;
+            try {
+                dir = await window.showDirectoryPicker({ id: "caltrack-data", mode: "readwrite", startIn: "documents" });
+            } catch (e) {
+                if (e && e.name === "AbortError") return { ok: false, name: null, error: null }; // cancelled
+                return { ok: false, name: null, error: (e && e.message) || "Couldn't open that folder." };
+            }
+            let perm = "prompt";
+            try {
+                perm = await dir.queryPermission({ mode: "readwrite" });
+                if (perm !== "granted") perm = await dir.requestPermission({ mode: "readwrite" });
+            } catch { perm = "denied"; }
+            if (perm !== "granted") return { ok: false, name: null, error: "CalTrack needs permission to save files in that folder." };
+            await this.idb("readwrite", s => s.put(dir, "dataDir"));
+            this.dir = dir;
+            return { ok: true, name: dir.name, error: null };
+        },
+
+        // Must run inside a click handler.
+        reconnect: async function () {
+            await this.load();
+            if (!this.dir) return "none";
+            try { return await this.dir.requestPermission({ mode: "readwrite" }); } catch { return "denied"; }
+        },
+
+        disconnect: async function () {
+            this.stopWatch();
+            this.dir = null;
+            try { await this.idb("readwrite", s => s.delete("dataDir")); } catch { /* already gone */ }
+        },
+
+        // { exists, text, lastModified } — text only when asked (polling needs the date only).
+        readMain: async function (withText) {
+            let fh;
+            try { fh = await this.dir.getFileHandle(this.MAIN); }
+            catch (e) { if (e && e.name === "NotFoundError") return { exists: false, text: null, lastModified: 0 }; throw e; }
+            const f = await fh.getFile();
+            return { exists: true, text: withText ? await f.text() : null, lastModified: f.lastModified };
+        },
+
+        // Chromium writes to a swap file and swaps it in on close(), so readers (the MCP
+        // server) never see a half-written file. Returns the new lastModified.
+        writeFile: async function (name, text) {
+            const fh = await this.dir.getFileHandle(name, { create: true });
+            const w = await fh.createWritable();
+            try { await w.write(text); } catch (e) { try { await w.abort(); } catch { } throw e; }
+            await w.close();
+            return (await fh.getFile()).lastModified;
+        },
+
+        listInbox: async function () {
+            const inbox = await this.dir.getDirectoryHandle(this.INBOX, { create: true });
+            const out = [];
+            for await (const [name, h] of inbox.entries()) {
+                // Writers create ".<id>.tmp" and rename when complete: only finished ops count.
+                if (h.kind !== "file" || name.startsWith(".") || !name.toLowerCase().endsWith(".json")) continue;
+                try { out.push({ name, text: await (await h.getFile()).text() }); } catch { /* vanished mid-list */ }
+            }
+            return out;
+        },
+
+        deleteInbox: async function (names) {
+            const inbox = await this.dir.getDirectoryHandle(this.INBOX, { create: true });
+            let n = 0;
+            for (const name of names) { try { await inbox.removeEntry(name); n++; } catch { /* already gone */ } }
+            return n;
+        },
+
+        // Poll while the page is visible (and immediately on refocus), so an entry logged
+        // over MCP shows up within ~2s while the app is open.
+        startWatch: function (dotnetRef) {
+            this.stopWatch();
+            this.dotnet = dotnetRef;
+            const tick = () => {
+                if (!document.hidden && this.dotnet)
+                    this.dotnet.invokeMethodAsync("OnFolderTick").catch(() => { });
+            };
+            this.timer = setInterval(tick, 2000);
+            this.onWake = () => tick();
+            document.addEventListener("visibilitychange", this.onWake);
+            window.addEventListener("focus", this.onWake);
+        },
+
+        stopWatch: function () {
+            if (this.timer) clearInterval(this.timer);
+            this.timer = null;
+            if (this.onWake) {
+                document.removeEventListener("visibilitychange", this.onWake);
+                window.removeEventListener("focus", this.onWake);
+            }
+            this.onWake = null;
+            this.dotnet = null;
+        },
+    },
 };

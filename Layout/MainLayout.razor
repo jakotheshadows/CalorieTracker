@@ -24,8 +24,25 @@
     </header>
 
     <main class="page-main">
+        @if (State.Folder == FolderState.NeedsReconnect)
+        {
+            <div class="folder-banner">
+                <span>⚠ CalTrack needs your OK to keep using your data folder <b>@State.FolderName</b>. Changes are kept in this browser until then.</span>
+                <button class="btn btn-accent btn-sm" @onclick="ReconnectFolderAsync">Reconnect folder</button>
+            </div>
+        }
         @Body
     </main>
+
+    @if (_toasts.Count > 0)
+    {
+        <div class="sync-toasts" role="status" aria-live="polite">
+            @foreach (var toast in _toasts)
+            {
+                <div class="sync-toast" @key="toast">@toast.Text</div>
+            }
+        </div>
+    }
 
     @if (_updateAvailable)
     {

@@ -1,17 +1,17 @@
-using System.Text.Json;
+using CalorieTracker.Data;
 using CalorieTracker.Models;
 
 namespace CalorieTracker.Services;
 
 /// <summary>
-/// In-memory application state persisted to localStorage. Owns menu items, the schedule,
-/// nutrition aggregation, and random schedule generation.
+/// In-memory application state persisted to localStorage — and, when the user connects a
+/// data folder, to its file too (see AppState.Folder.cs). Owns menu items, the schedule,
+/// nutrition aggregation, and random schedule generation. The data operations themselves
+/// live in CalTrack.Core (AppDataOps) so the MCP server performs the identical logic.
 /// </summary>
-public class AppState(LocalStore store)
+public partial class AppState(LocalStore store, DataFolder folder)
 {
     public const string DataKey = "caltrack-data";
-
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
     public AppData Data { get; private set; } = new();
     public bool Loaded { get; private set; }
@@ -24,28 +24,27 @@ public class AppState(LocalStore store)
         if (Loaded) return;
         try
         {
-            var json = await store.GetAsync(DataKey);
-            if (!string.IsNullOrWhiteSpace(json))
-                Data = JsonSerializer.Deserialize<AppData>(json, JsonOpts) ?? new AppData();
+            Data = AppDataJson.Parse(await store.GetAsync(DataKey));
         }
         catch
         {
             // Corrupt/missing local data — start fresh rather than crash.
             Data = new AppData();
         }
+        // A connected data folder is the shared source of truth: load from it when access
+        // is already granted (never throws; keeps the browser copy above on any failure).
+        await InitFolderAsync();
         Loaded = true;
         Changed?.Invoke();
     }
 
-    public string ExportJson() => JsonSerializer.Serialize(Data, new JsonSerializerOptions { WriteIndented = true });
+    public string ExportJson() => AppDataJson.Serialize(Data, indented: true);
 
     public async Task<string?> ImportJsonAsync(string json)
     {
         try
         {
-            var data = JsonSerializer.Deserialize<AppData>(json, JsonOpts);
-            if (data is null) return "File did not contain valid data.";
-            Data = data;
+            Data = AppDataJson.Parse(json);
             await PersistAsync();
             return null;
         }
@@ -64,32 +63,29 @@ public class AppState(LocalStore store)
     public async Task PersistAsync()
     {
         Data.LastModifiedUtc = DateTime.UtcNow;
-        await store.SetAsync(DataKey, JsonSerializer.Serialize(Data, JsonOpts));
+        await store.SetAsync(DataKey, AppDataJson.Serialize(Data));
+        // Write-through to the connected data folder (no-op when none is connected).
+        await PersistToFolderAsync();
         Changed?.Invoke();
     }
 
     // ---------- Menu items ----------
 
-    public FoodItem? FindItem(string name) =>
-        Data.Items.FirstOrDefault(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase));
+    public FoodItem? FindItem(string name) => Data.FindItem(name);
 
-    public Recipe? FindRecipe(string name) =>
-        Data.Recipes.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
+    public Recipe? FindRecipe(string name) => Data.FindRecipe(name);
 
     /// <summary>
     /// Resolve a schedule/template name to a menu item: a plain item, or a recipe presented
     /// as its per-serving menu-item view. Null when the name matches neither.
     /// </summary>
-    public FoodItem? ResolveItem(string name) =>
-        FindItem(name) ?? FindRecipe(name)?.ToMenuItem();
+    public FoodItem? ResolveItem(string name) => Data.ResolveItem(name);
 
     /// <summary>All schedulable menu items: plain items plus recipes as per-serving views.</summary>
-    public IEnumerable<FoodItem> AllMenuItems() =>
-        Data.Items.Concat(Data.Recipes.Select(r => r.ToMenuItem()));
+    public IEnumerable<FoodItem> AllMenuItems() => Data.AllMenuItems();
 
     /// <summary>The item a schedule entry stands for: its embedded one-off item, or the named menu item/recipe.</summary>
-    public FoodItem? ResolveEntry(ScheduleEntry entry) =>
-        entry.AdHoc ?? ResolveItem(entry.ItemName);
+    public FoodItem? ResolveEntry(ScheduleEntry entry) => Data.ResolveEntry(entry);
 
     /// <summary>Add or update an item. <paramref name="originalName"/> is non-null when editing an existing item.</summary>
     public async Task<string?> UpsertItemAsync(FoodItem item, string? originalName)
@@ -237,28 +233,16 @@ public class AppState(LocalStore store)
 
     // ---------- Schedule ----------
 
-    public List<ScheduleEntry> GetDay(DateOnly date) =>
-        Data.Days.TryGetValue(AppData.DayKey(date), out var list) ? list : new List<ScheduleEntry>();
+    public List<ScheduleEntry> GetDay(DateOnly date) => Data.GetDay(date);
 
     public async Task AddEntryAsync(DateOnly date, string itemName, double servings)
     {
         if (servings <= 0) return;
-        var list = DayList(date);
-
-        var existing = list.FirstOrDefault(e => e.AdHoc is null && string.Equals(e.ItemName, itemName, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null) existing.Servings += servings;
-        else list.Add(new ScheduleEntry { ItemName = itemName, Servings = servings });
-
+        Data.AddEntry(date, itemName, servings);
         await PersistAsync();
     }
 
-    private List<ScheduleEntry> DayList(DateOnly date)
-    {
-        var key = AppData.DayKey(date);
-        if (!Data.Days.TryGetValue(key, out var list))
-            Data.Days[key] = list = new List<ScheduleEntry>();
-        return list;
-    }
+    private List<ScheduleEntry> DayList(DateOnly date) => Data.DayList(date);
 
     /// <summary>
     /// Add a one-off item to a day. When <paramref name="saveToMenu"/> is set the item is
@@ -279,7 +263,7 @@ public class AppState(LocalStore store)
             return null;
         }
 
-        DayList(date).Add(new ScheduleEntry { ItemName = name, Servings = servings, AdHoc = item });
+        Data.AddAdHoc(date, item, servings);
         await PersistAsync();
         return null;
     }
@@ -463,14 +447,7 @@ public class AppState(LocalStore store)
         return totals;
     }
 
-    private void AccumulateDay(Totals totals, DateOnly date)
-    {
-        foreach (var entry in GetDay(date))
-        {
-            var item = ResolveEntry(entry);
-            if (item is not null) totals.Add(item, entry.Servings);
-        }
-    }
+    private void AccumulateDay(Totals totals, DateOnly date) => Data.AccumulateDay(totals, date);
 
     /// <summary>Sunday-based start of the week containing <paramref name="date"/>.</summary>
     public static DateOnly WeekStart(DateOnly date) => date.AddDays(-(int)date.DayOfWeek);

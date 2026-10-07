@@ -8,10 +8,31 @@ public partial class MainLayout
     private bool _updating;
     private DotNetObjectReference<MainLayout>? _selfRef;
 
+    // Data-folder activity ("Logged via MCP: …"), each shown for a few seconds.
+    private sealed class Toast(string text) { public string Text { get; } = text; }
+    private readonly List<Toast> _toasts = new();
+
     protected override async Task OnInitializedAsync()
     {
         State.Changed += OnChanged;
+        State.FolderActivity += OnFolderActivity; // before loading: startup sync may report
         await State.EnsureLoadedAsync();
+    }
+
+    private void OnFolderActivity(string message) => _ = ShowToastAsync(message);
+
+    private async Task ShowToastAsync(string message)
+    {
+        var toast = new Toast(message);
+        await InvokeAsync(() => { _toasts.Add(toast); StateHasChanged(); });
+        await Task.Delay(message.Length > 120 ? 12000 : 7000);
+        await InvokeAsync(() => { _toasts.Remove(toast); StateHasChanged(); });
+    }
+
+    private async Task ReconnectFolderAsync()
+    {
+        var error = await State.ReconnectFolderAsync();
+        if (error is not null) _ = ShowToastAsync(error);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -56,6 +77,7 @@ public partial class MainLayout
     public void Dispose()
     {
         State.Changed -= OnChanged;
+        State.FolderActivity -= OnFolderActivity;
         _selfRef?.Dispose();
     }
 }

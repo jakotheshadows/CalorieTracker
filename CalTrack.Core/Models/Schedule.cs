@@ -33,6 +33,12 @@ public class AppData
     /// <summary>Profile + weight goal; null until the user sets goals up.</summary>
     public GoalSettings? Goals { get; set; }
 
+    /// <summary>
+    /// Ids of data-folder inbox ops already folded in (see CalorieTracker.Sync.Inbox), so a
+    /// crash between saving and deleting an op file can never apply it twice.
+    /// </summary>
+    public List<string> ProcessedOpIds { get; set; } = new();
+
     public static string DayKey(DateOnly d) => d.ToString("yyyy-MM-dd");
 }
 

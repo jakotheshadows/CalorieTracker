@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Local stdio MCP server for CalTrack: launched by the MCP client (Claude Desktop,
+       Claude Code…), it reads the user's connected CalTrack data folder and logs food by
+       dropping ops into its inbox/ — never by rewriting the app's data file. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>CalTrack.Mcp</RootNamespace>
+    <AssemblyName>caltrack-mcp</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CalTrack.Core\CalTrack.Core.csproj" />
+  </ItemGroup>
+
+</Project>

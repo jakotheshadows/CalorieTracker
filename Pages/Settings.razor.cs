@@ -14,11 +14,40 @@ public partial class Settings
     private string _usdaKey = "";
     private string? _usdaKeyStatus;
     private bool _testingKey;
+    private bool _folderBusy;
+    private string? _folderError;
+    private bool _standalone = true;
 
     protected override async Task OnInitializedAsync()
     {
+        State.Changed += OnStateChanged; // folder state can change from the layout banner or a sync tick
         _version = await JS.InvokeAsync<string>("calTracker.getVersion");
         _usdaKey = await Usda.GetApiKeyAsync() ?? "";
+        _standalone = await JS.InvokeAsync<bool>("calTracker.install.isStandalone");
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+
+    private async Task ConnectFolderAsync()
+    {
+        _folderBusy = true;
+        _folderError = await State.ConnectFolderAsync();
+        _folderBusy = false;
+    }
+
+    private async Task ReconnectFolderAsync()
+    {
+        _folderBusy = true;
+        _folderError = await State.ReconnectFolderAsync();
+        _folderBusy = false;
+    }
+
+    private async Task DisconnectFolderAsync()
+    {
+        _folderError = null;
+        await State.DisconnectFolderAsync();
     }
 
     private async Task SaveUsdaKeyAsync()
