@@ -170,12 +170,9 @@ public static partial class CalTrackTools
     // ---------- helpers ----------
 
     /// <summary>
-    /// Write the op, then re-read the folder and confirm it's there — pending in the inbox,
-    /// or already folded in by the app. Success is only reported for a write we can see.
-    /// </summary>
-    /// <summary>
     /// Write an op, then re-read the folder and confirm it's there — pending in the inbox,
-    /// or already folded in by the app. Returns the fresh snapshot and "queued"/"applied".
+    /// or already folded in by the app. Success is only reported for a write we can see.
+    /// Returns the fresh snapshot and "queued"/"applied".
     /// </summary>
     private static (FolderSnapshot After, string Status) WriteVerified(DataFolderStore store, InboxOp op)
     {

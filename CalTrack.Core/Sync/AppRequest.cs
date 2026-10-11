@@ -63,21 +63,14 @@ public static class AppRequests
     public static string FileNameFor(string id) => $"{id}.json";
 
     public static string Serialize(AppRequest r) => JsonSerializer.Serialize(r, Json);
-    public static string Serialize(AppResponse r) => JsonSerializer.Serialize(r, Json);
 
-    public static AppRequest? TryParseRequest(string text) => TryParse<AppRequest>(text, r => r.Id, r => r.Kind);
-    public static AppResponse? TryParseResponse(string text) => TryParse<AppResponse>(text, r => r.Id, _ => "-");
-
-    /// <summary>Past its asker's timeout: answering it would only leave an orphaned response.</summary>
-    public static bool IsExpired(AppRequest r, DateTime utcNow) =>
-        utcNow - r.CreatedUtc > TimeSpan.FromSeconds(Math.Max(1, r.TimeoutSeconds));
-
-    private static T? TryParse<T>(string text, Func<T, string> id, Func<T, string> kind) where T : class
+    /// <summary>The app's answer, or null when the text isn't a complete one.</summary>
+    public static AppResponse? TryParseResponse(string text)
     {
         try
         {
-            var r = JsonSerializer.Deserialize<T>(text, Json);
-            return r is null || string.IsNullOrWhiteSpace(id(r)) || string.IsNullOrWhiteSpace(kind(r)) ? null : r;
+            var r = JsonSerializer.Deserialize<AppResponse>(text, Json);
+            return r is null || string.IsNullOrWhiteSpace(r.Id) ? null : r;
         }
         catch (JsonException)
         {

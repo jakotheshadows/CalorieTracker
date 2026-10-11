@@ -285,18 +285,18 @@ public sealed class UsdaMenuTests : IDisposable
     }
 
     [Fact]
-    public void Requests_and_responses_round_trip_and_expire()
+    public void Responses_in_the_workers_shape_arrive_verbatim()
     {
+        // PascalCase JSON, as request-worker.js writes it; USDA's reply passes through untouched.
         var body = File.ReadAllText(Path.Combine(Fixtures, "usda-food-172226.json"));
-        var back = AppRequests.TryParseResponse(AppRequests.Serialize(new AppResponse { Id = "x", Status = 200, Body = body }))!;
-        Assert.Equal(body, back.Body); // USDA's reply arrives verbatim
+        var back = AppRequests.TryParseResponse(JsonSerializer.Serialize(new { Id = "x", Error = (string?)null, Status = 200, Body = body }))!;
+        Assert.Equal(body, back.Body);
 
-        // PascalCase, as request-worker.js writes it.
-        var fromWorker = AppRequests.TryParseResponse("""{"Id":"y","Error":null,"Status":404,"Body":""}""")!;
-        Assert.Equal("USDA has no food with id 9.", UsdaClient.ReadFood(fromWorker.Status, fromWorker.Body, 9).Error);
+        var notFound = AppRequests.TryParseResponse("""{"Id":"y","Error":null,"Status":404,"Body":""}""")!;
+        Assert.Equal("USDA has no food with id 9.", UsdaClient.ReadFood(notFound.Status, notFound.Body, 9).Error);
 
-        var request = new AppRequest { Id = "r", Kind = AppRequest.UsdaGet, CreatedUtc = DateTime.UtcNow.AddSeconds(-30), TimeoutSeconds = 20 };
-        Assert.True(AppRequests.IsExpired(request, DateTime.UtcNow)); // asker gave up: the app skips it
+        Assert.Null(AppRequests.TryParseResponse("""{"Id":"z","Status":2""")); // cut short: not an answer yet
+        Assert.Null(AppRequests.TryParseResponse("""{"Status":200}"""));       // no id: nobody's answer
     }
 
     private static InboxOp AddOp(string name, double calories) => new()
@@ -348,11 +348,10 @@ public sealed class UsdaMenuTests : IDisposable
                     if (Directory.Exists(requests))
                         foreach (var path in Directory.GetFiles(requests, "*.json"))
                         {
-                            var request = AppRequests.TryParseRequest(File.ReadAllText(path));
-                            if (request is not null && !AppRequests.IsExpired(request, DateTime.UtcNow))
+                            if (ReadLive(File.ReadAllText(path)) is { } request)
                             {
                                 Directory.CreateDirectory(responses);
-                                File.WriteAllText(Path.Combine(responses, AppRequests.FileNameFor(request.Id)), AppRequests.Serialize(Answer(request)));
+                                File.WriteAllText(Path.Combine(responses, AppRequests.FileNameFor(request.Id)), JsonSerializer.Serialize(Answer(request)));
                                 Interlocked.Increment(ref Answered);
                             }
                             File.Delete(path);
@@ -360,6 +359,20 @@ public sealed class UsdaMenuTests : IDisposable
                     try { await Task.Delay(25, _stop.Token); } catch (OperationCanceledException) { }
                 }
             });
+        }
+
+        /// <summary>The worker's rules: skip unreadable requests and those past their asker's timeout.</summary>
+        private static AppRequest? ReadLive(string text)
+        {
+            try
+            {
+                var r = JsonSerializer.Deserialize<AppRequest>(text);
+                return r is { Id.Length: > 0 } && DateTime.UtcNow - r.CreatedUtc <= TimeSpan.FromSeconds(Math.Max(1, r.TimeoutSeconds)) ? r : null;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
         }
 
         private AppResponse Answer(AppRequest r)
