@@ -9,6 +9,9 @@ in a folder on your disk.
 
 ## Setup
 
+New to CalTrack? The [project README](../README.md) walks through the whole Windows setup, from
+installing the app to your first meal logged through Claude. The short version:
+
 **1. Connect a data folder in CalTrack.** Settings → *Data folder* → *Connect data folder…* and
 pick an empty folder, e.g. `Documents\CalTrack`. This needs Chrome or Edge on a desktop — Safari
 and Firefox don't support the File System Access API, and the app says so when it detects that.
