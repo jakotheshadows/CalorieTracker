@@ -20,6 +20,11 @@ const base = "/";
 const baseUrl = new URL(base, self.origin);
 const manifestUrlList = self.assetsManifest.assets.map(asset => new URL(asset.url, baseUrl).href);
 
+// Files offered for download (the Claude Desktop bundle), added by the deploy workflow after
+// publish: never cached, and never answered with index.html — a click on a download link is a
+// navigation request, and the SPA fallback below would otherwise hand back the app page.
+const downloadsUrl = new URL('downloads/', baseUrl).href;
+
 async function onInstall(event) {
     console.info('Service worker: Install');
 
@@ -48,7 +53,8 @@ async function onFetch(event) {
         // unless that request is for an offline resource.
         // If you need some URLs to be server-rendered, edit the following check to exclude those URLs
         const shouldServeIndexHtml = event.request.mode === 'navigate'
-            && !manifestUrlList.some(url => url === event.request.url);
+            && !manifestUrlList.some(url => url === event.request.url)
+            && !event.request.url.startsWith(downloadsUrl);
 
         const request = shouldServeIndexHtml ? 'index.html' : event.request;
         const cache = await caches.open(cacheName);

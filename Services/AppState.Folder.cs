@@ -391,6 +391,17 @@ public partial class AppState
         try { return await folder.StatusAsync(); } catch { return null; }
     }
 
+    /// <summary>
+    /// What the MCP server last reported about itself (it writes this each time Claude starts
+    /// it): null when it has never run against this folder, or the folder isn't connected.
+    /// </summary>
+    public async Task<ServerStatus?> ReadServerStatusAsync()
+    {
+        if (Folder != FolderState.Connected) return null;
+        try { return ServerStatus.TryParse(await folder.ReadFileAsync(ServerStatus.FileName)); }
+        catch { return null; }
+    }
+
     // ---------- Helpers ----------
 
     private void Notify(string message) => FolderActivity?.Invoke(message);

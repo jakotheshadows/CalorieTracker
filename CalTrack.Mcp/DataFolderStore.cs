@@ -84,6 +84,19 @@ public sealed class DataFolderStore(string? root)
         return final;
     }
 
+    /// <summary>
+    /// Tell the app which server version Claude is running (Settings shows it and offers
+    /// updates). Replaced atomically; several server processes may race to write it, and any
+    /// winner is right.
+    /// </summary>
+    public void WriteStatus(ServerStatus status)
+    {
+        var root = RequireRoot();
+        var tmp = Path.Combine(root, $".{ServerStatus.FileName}.{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(tmp, ServerStatus.Serialize(status), new UTF8Encoding(false));
+        File.Move(tmp, Path.Combine(root, ServerStatus.FileName), overwrite: true);
+    }
+
     // ---------- requests to the app (its API; see AppRequest) ----------
 
     /// <summary>Ask the app something: atomic create-then-rename into requests/.</summary>

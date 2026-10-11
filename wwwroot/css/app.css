@@ -791,3 +791,5 @@ textarea.input { resize: vertical; }
     font-size: .9rem;
 }
 .folder-status { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.claude-setup { margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--border); }
+.claude-setup h4 { font-size: .95rem; margin: 0 0 .4rem; }

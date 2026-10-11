@@ -771,6 +771,14 @@ window.calTracker = {
         getState: function () {
             return { standalone: this.isStandalone(), platform: this.platform() };
         },
+
+        // The Claude Desktop bundle is Windows-only. Chrome and Edge (the browsers that can
+        // connect the data folder it needs) report the OS directly; the UA string covers the rest.
+        isWindows: function () {
+            return navigator.userAgentData
+                ? navigator.userAgentData.platform === "Windows"
+                : /Windows NT/.test(navigator.userAgent);
+        },
     },
 
     downloadFile: (fileName, content) => {
@@ -879,6 +887,12 @@ window.calTracker = {
             catch (e) { if (e && e.name === "NotFoundError") return { exists: false, text: null, lastModified: 0 }; throw e; }
             const f = await fh.getFile();
             return { exists: true, text: withText ? await f.text() : null, lastModified: f.lastModified };
+        },
+
+        // A small file in the folder root, or null when it isn't there.
+        readFile: async function (name) {
+            try { return await (await (await this.dir.getFileHandle(name)).getFile()).text(); }
+            catch (e) { if (e && e.name === "NotFoundError") return null; throw e; }
         },
 
         // Chromium writes to a swap file and swaps it in on close(), so readers (the MCP

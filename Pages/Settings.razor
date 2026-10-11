@@ -59,11 +59,12 @@
                 </p>
                 <p class="muted small">
                     CalTrack saves everything to <code>caltrack-data.json</code> in that folder and picks
-                    up entries logged by the CalTrack MCP server within a couple of seconds.
+                    up what Claude logs within a couple of seconds.
                 </p>
                 <div class="btn-row">
                     <ConfirmButton Label="Disconnect folder" OnConfirm="DisconnectFolderAsync" />
                 </div>
+                <ClaudeSetup FolderName="@State.FolderName" />
                 break;
 
             case FolderState.NeedsReconnect:
@@ -80,10 +81,10 @@
 
             default:
                 <p class="muted small">
-                    Also keep your data in a folder on this computer — that's what lets the
-                    <a href="https://github.com/jakotheshadows/CalorieTracker/tree/main/CalTrack.Mcp" target="_blank" rel="noopener">CalTrack MCP server</a>
-                    read your log and add entries when you tell Claude what you ate. Create an empty
-                    folder (for example <code>Documents\CalTrack</code>) and choose it.
+                    Also keep your data in a folder on this computer — that's what lets Claude Desktop
+                    read your log and add entries when you tell it what you ate. Create an empty folder
+                    (for example <code>Documents\CalTrack</code>) and choose it; the Claude Desktop
+                    setup appears here once it's connected.
                 </p>
                 <div class="btn-row">
                     <button class="btn btn-accent" disabled="@_folderBusy" @onclick="ConnectFolderAsync">Connect data folder…</button>

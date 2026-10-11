@@ -1,0 +1,48 @@
+{
+  "manifest_version": "0.3",
+  "name": "caltrack",
+  "display_name": "CalTrack",
+  "version": "0.5.0",
+  "description": "Log food in CalTrack by telling Claude what you ate.",
+  "long_description": "Connects Claude Desktop to your CalTrack data folder on this PC. Claude can read your menu and any day's log, log foods from your menu or one-offs you describe, and add foods to your menu from USDA FoodData Central. Your data stays in the folder. USDA lookups are made by the CalTrack app with the key saved in its Settings, so CalTrack must be open for those.",
+  "author": {
+    "name": "jakotheshadows",
+    "url": "https://github.com/jakotheshadows"
+  },
+  "homepage": "https://jakotheshadows.github.io/CalorieTracker/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jakotheshadows/CalorieTracker"
+  },
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/caltrack-mcp.exe",
+    "mcp_config": {
+      "command": "${__dirname}/server/caltrack-mcp.exe",
+      "args": ["--data-dir", "${user_config.data_dir}"],
+      "env": {}
+    }
+  },
+  "tools": [
+    { "name": "list_menu_items", "description": "List the foods on your menu with per-serving nutrition." },
+    { "name": "get_day", "description": "Show what's logged for a day, with totals." },
+    { "name": "log_food", "description": "Log servings of a food on your menu." },
+    { "name": "log_adhoc", "description": "Log a one-off food with nutrition you give." },
+    { "name": "search_usda", "description": "Search USDA FoodData Central (through the open CalTrack app)." },
+    { "name": "add_menu_item", "description": "Add a food to your menu, with USDA's numbers or yours." }
+  ],
+  "user_config": {
+    "data_dir": {
+      "type": "directory",
+      "title": "CalTrack data folder",
+      "description": "The folder connected in CalTrack: Settings, Data folder.",
+      "required": true,
+      "default": "${DOCUMENTS}/CalTrack"
+    }
+  },
+  "compatibility": {
+    "platforms": ["win32"]
+  },
+  "keywords": ["calories", "nutrition", "food log", "usda"]
+}

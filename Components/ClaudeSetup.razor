@@ -1,0 +1,58 @@
+@* The Claude Desktop part of the data-folder card. On Windows: the CalTrack for Claude
+   download — an MCP bundle the deploy workflow builds next to the app, so it always matches
+   this version — and whether Claude already runs it, from the status file the server writes
+   into the folder. Elsewhere: a note that it needs Windows. *@
+@using CalorieTracker.Sync
+@inject AppState State
+@inject IJSRuntime JS
+
+<div class="claude-setup">
+    <h4>Claude Desktop</h4>
+    @if (_isWindows is null)
+    {
+        <p class="muted small">…</p>
+    }
+    else if (_isWindows == false)
+    {
+        <p class="muted small">
+            Logging with Claude works on a Windows PC with Claude Desktop — open CalTrack there to
+            set it up.
+        </p>
+    }
+    else if (_status is { } running && !ServerStatus.IsOutdated(running.Version))
+    {
+        <p class="muted small folder-status">
+            <span class="dot dot-ok"></span>
+            <span>Set up — Claude Desktop is running CalTrack for Claude (version @running.Version). Tell Claude what you ate.</span>
+        </p>
+    }
+    else
+    {
+        @if (_status is { } old)
+        {
+            <p class="muted small">
+                <b>Update available.</b> Claude Desktop is running version @old.Version of CalTrack for
+                Claude; this CalTrack comes with version @ServerStatus.CurrentVersion. Download it and
+                open it again to update.
+            </p>
+        }
+        else
+        {
+            <p class="muted small">Tell Claude what you ate and it lands here. One-time setup:</p>
+        }
+        <ol class="muted small setup-steps">
+            <li>Download <b>CalTrack for Claude</b> below.</li>
+            <li>Open the downloaded file. Claude Desktop shows an install dialog — click <b>Install</b>.</li>
+            <li>When it asks for the data folder, choose your <b>@FolderName</b> folder — the one connected above.</li>
+            <li>Start a new chat in Claude and try <i>"What's on my CalTrack menu?"</i></li>
+        </ol>
+        <div class="btn-row">
+            <a class="btn btn-accent" href="@DownloadPath" download>Download CalTrack for Claude</a>
+            <button class="btn" disabled="@_checking" @onclick="CheckAgainAsync">Check again</button>
+        </div>
+        <p class="muted small">
+            Needs <a href="https://claude.ai/download" target="_blank" rel="noopener">Claude Desktop</a>
+            for Windows. The download is about 30 MB.
+        </p>
+    }
+</div>

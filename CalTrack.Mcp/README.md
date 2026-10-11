@@ -9,8 +9,12 @@ in a folder on your disk.
 
 ## Setup
 
-New to CalTrack? The [project README](../README.md) walks through the whole Windows setup, from
-installing the app to your first meal logged through Claude. The short version:
+**Using CalTrack?** You don't need any of this: on Windows, CalTrack's **Settings → Data
+folder** offers **CalTrack for Claude**, a ready-made Claude Desktop bundle of this server
+(built by the deploy workflow from [`mcpb/manifest.json`](mcpb/manifest.json)). The
+[project README](../README.md) walks through it.
+
+**Building it yourself:**
 
 **1. Connect a data folder in CalTrack.** Settings → *Data folder* → *Connect data folder…* and
 pick an empty folder, e.g. `Documents\CalTrack`. This needs Chrome or Edge on a desktop — Safari

@@ -8,8 +8,8 @@ accounts, no ads, no tracking — your data stays on your device.
 Optionally, connect it to **Claude Desktop** and log food by just telling Claude what you ate:
 *"I had two eggs and toast for breakfast."*
 
-This guide walks through the full setup on **Windows**: the app first (5 minutes), then the
-Claude integration (about 15 minutes, mostly installs).
+This guide walks through the full setup on **Windows**: the app, then the Claude integration —
+about 10 minutes in all, nothing to build or configure by hand.
 
 ---
 
@@ -19,7 +19,7 @@ Claude integration (about 15 minutes, mostly installs).
 | --- | --- |
 | The app | Windows 10 or 11 with **Microsoft Edge** or **Google Chrome** |
 | USDA nutrition search (optional) | A free API key from [api.data.gov](https://api.data.gov/signup/) |
-| The Claude integration (optional) | [Claude Desktop](https://claude.ai/download), plus the .NET 9 SDK and Git (installed in step 3) |
+| The Claude integration (optional) | [Claude Desktop](https://claude.ai/download) for Windows |
 
 Firefox can run CalTrack, but it can't connect the data folder the Claude integration uses, so
 use Edge or Chrome.
@@ -69,64 +69,25 @@ never silently overwrites it: it loads the change, or keeps that version as a se
 
 ---
 
-## 3. Install the CalTrack server
+## 3. Add CalTrack to Claude Desktop
 
-The server is a small program that Claude Desktop runs in the background. You build it once
-from this repository.
+1. Install [Claude Desktop](https://claude.ai/download) if you haven't, and sign in.
+2. In CalTrack: **Settings → Data folder (Claude / MCP)**. Under **Claude Desktop**, click
+   **Download CalTrack for Claude** (about 30 MB). This section appears once the folder is
+   connected, and only on Windows.
+3. Open the downloaded `caltrack-windows.mcpb`. Claude Desktop shows an install dialog — click
+   **Install**.
+4. When it asks for the **CalTrack data folder**, choose the folder you connected in CalTrack
+   (section 2). It suggests `Documents\CalTrack`, so if that's where yours is, just confirm.
+5. Back in CalTrack, click **Check again**. It should say **Set up — Claude Desktop is running
+   CalTrack for Claude**.
 
-Open **PowerShell** and install the tools (skip any you already have):
-
-```powershell
-winget install Microsoft.DotNet.SDK.9
-winget install Git.Git
-```
-
-Close PowerShell and open a new window so it finds them, then:
-
-```powershell
-git clone https://github.com/jakotheshadows/CalorieTracker.git
-cd CalorieTracker
-dotnet publish CalTrack.Mcp -c Release -o "$env:USERPROFILE\caltrack-mcp"
-```
-
-This creates `C:\Users\<you>\caltrack-mcp\caltrack-mcp.exe`. Keep the `CalorieTracker` folder —
-you'll use it to update later.
-
-(No Git? On GitHub use **Code → Download ZIP**, unzip it, and run the `dotnet publish` line
-inside the unzipped folder.)
+In Claude Desktop the extension is called **CalTrack**. Everything it needs is in the download —
+no .NET, no config files.
 
 ---
 
-## 4. Register it with Claude Desktop
-
-1. In Claude Desktop, open **Settings → Developer → Edit Config**. (These are the desktop app's
-   own settings, not your claude.ai account settings.) This opens `claude_desktop_config.json`.
-2. Add the `caltrack` entry, replacing `<you>` with your Windows user name — twice:
-
-   ```json
-   {
-     "mcpServers": {
-       "caltrack": {
-         "command": "C:\\Users\\<you>\\caltrack-mcp\\caltrack-mcp.exe",
-         "args": ["--data-dir", "C:\\Users\\<you>\\Documents\\CalTrack"]
-       }
-     }
-   }
-   ```
-
-   - Backslashes must be doubled (`\\`) in this file.
-   - `--data-dir` must be the folder you connected in step 2.
-   - If the file already has an `"mcpServers"` section, add `"caltrack": { … }` inside it,
-     with a comma after the entry before it.
-3. **Fully quit** Claude Desktop — right-click its icon in the taskbar's notification area and
-   choose **Quit** (closing the window isn't enough) — then open it again.
-4. Check it's connected: in a chat, click **+** (*Add files, connectors, and more*) at the
-   bottom left of the message box → **Connectors → Manage connectors**. **caltrack** should be
-   listed with six tools.
-
----
-
-## 5. Try it
+## 4. Try it
 
 Start a new chat in Claude Desktop and try:
 
@@ -166,16 +127,11 @@ directly. One-off foods use numbers you give it — Claude is instructed never t
 **The app** updates itself. When a new version is ready, a banner offers **Update now**; you can
 also use **Settings → App updates → Check for updates**.
 
-**The server:** quit Claude Desktop fully first (the files are in use while it runs), then in
-PowerShell:
+**CalTrack for Claude:** when a new version comes with the app, **Settings → Data folder →
+Claude Desktop** says **Update available**. Download it again and open it; Claude Desktop
+replaces the old version.
 
-```powershell
-cd CalorieTracker
-git pull
-dotnet publish CalTrack.Mcp -c Release -o "$env:USERPROFILE\caltrack-mcp"
-```
-
-…and reopen Claude Desktop. If Claude ever says CalTrack needs updating, update the app.
+If Claude ever says CalTrack needs updating, update the app.
 
 ---
 
@@ -183,24 +139,15 @@ dotnet publish CalTrack.Mcp -c Release -o "$env:USERPROFILE\caltrack-mcp"
 
 | Problem | Fix |
 | --- | --- |
-| **caltrack** isn't listed in Claude's connectors | Check the config: doubled backslashes, commas, and that both paths exist. Then fully quit and reopen Claude Desktop. Claude's logs are in `%APPDATA%\Claude\logs` (`mcp.log` and `mcp-server-caltrack.log`). |
-| *"No CalTrack data folder is configured"* or *"…doesn't exist"* | The `--data-dir` path in the config is wrong — it must be the folder connected in CalTrack. |
+| No **Claude Desktop** section in CalTrack's Settings | Connect the data folder first (step 2), on Windows in Edge or Chrome. |
+| Opening the download doesn't bring up Claude Desktop | Install Claude Desktop first. Or open Claude Desktop's **Settings → Extensions** and install the file from there. |
+| Settings still says **Tell Claude what you ate…** after installing | Click **Check again**. If it doesn't change, make sure the CalTrack extension is enabled in Claude Desktop's **Settings → Extensions**. |
+| Claude finds an empty menu, or says the data folder doesn't exist | The extension points at a different folder. In Claude Desktop's **Settings → Extensions → CalTrack**, set the data folder to the one connected in CalTrack. |
 | *"CalTrack didn't answer within 20 seconds"* | Open CalTrack. If it shows **Reconnect folder**, click it. Then ask again. |
 | *"No API key configured"* | Save your key in CalTrack: **Settings → USDA nutrition lookup**. |
 | A message about updating CalTrack | **Settings → App updates → Check for updates**, then **Update now**. |
 | **Not available in this browser** on the Data folder card | Use Edge or Chrome on your PC. |
-| `dotnet publish` fails because a file is in use | Quit Claude Desktop fully, then run it again. |
 | Entries Claude logged aren't in CalTrack yet | Open CalTrack (and reconnect the folder if asked) — they're waiting in the folder and appear within seconds. |
-
----
-
-## Also works with Claude Code
-
-To use the same server from [Claude Code](https://claude.com/claude-code) in a terminal:
-
-```powershell
-claude mcp add --scope user caltrack -- "$env:USERPROFILE\caltrack-mcp\caltrack-mcp.exe" --data-dir "$env:USERPROFILE\Documents\CalTrack"
-```
 
 ---
 
@@ -227,4 +174,21 @@ claude mcp add --scope user caltrack -- "$env:USERPROFILE\caltrack-mcp\caltrack-
 ```powershell
 dotnet run --project CalorieTracker.csproj   # the app, locally
 dotnet test CalTrack.Tests                    # the tests
+```
+
+The deploy workflow also builds **CalTrack for Claude** — the server as a self-contained
+Windows exe, packed into a Claude Desktop bundle (`CalTrack.Mcp/mcpb/manifest.json`) — and
+publishes it at `downloads/caltrack-windows.mcpb` next to the app.
+
+To run the server from source instead (needs the [.NET 9 SDK](https://dotnet.microsoft.com/download)):
+
+```powershell
+dotnet publish CalTrack.Mcp -c Release -o "$env:USERPROFILE\caltrack-mcp"
+```
+
+…then register `caltrack-mcp.exe --data-dir <your data folder>` with your MCP client — in
+Claude Desktop under **Settings → Developer → Edit Config**, or in Claude Code:
+
+```powershell
+claude mcp add --scope user caltrack -- "$env:USERPROFILE\caltrack-mcp\caltrack-mcp.exe" --data-dir "$env:USERPROFILE\Documents\CalTrack"
 ```

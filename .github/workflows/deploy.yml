@@ -27,6 +27,24 @@ jobs:
       - name: Publish
         run: dotnet publish CalorieTracker.csproj -c Release -o out
 
+      # CalTrack for Claude: the MCP server as a Claude Desktop bundle (.mcpb) for Windows —
+      # self-contained, so users install nothing else. Built from the same commit and served
+      # next to the app, so the download always matches the app that offers it.
+      - name: Build the Claude Desktop bundle
+        run: |
+          WANT=$(grep -oP 'CurrentVersion = "\K[^"]+' CalTrack.Core/Sync/ServerStatus.cs)
+          HAVE=$(node -p "require('./CalTrack.Mcp/mcpb/manifest.json').version")
+          if [ "$WANT" != "$HAVE" ]; then
+            echo "::error::mcpb/manifest.json is version $HAVE but ServerStatus.CurrentVersion is $WANT"
+            exit 1
+          fi
+          dotnet publish CalTrack.Mcp -c Release -r win-x64 --self-contained \
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=none \
+            -o mcpb/server
+          cp CalTrack.Mcp/mcpb/manifest.json CalTrack.Mcp/mcpb/icon.png mcpb/
+          mkdir -p out/wwwroot/downloads
+          npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb out/wwwroot/downloads/caltrack-windows.mcpb
+
       - name: Rewrite base href for project-site subpath
         run: |
           REPO="${{ github.event.repository.name }}"

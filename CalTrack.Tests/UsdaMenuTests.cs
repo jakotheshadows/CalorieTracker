@@ -315,11 +315,8 @@ public sealed class UsdaMenuTests : IDisposable
 
     private static readonly Lazy<Regex> WorkerAllowlist = new(() =>
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "wwwroot", "js", "request-worker.js"))) dir = dir.Parent;
-        var js = File.ReadAllText(Path.Combine(dir!.FullName, "wwwroot", "js", "request-worker.js"));
-        var literal = Regex.Match(js, @"const ALLOWED = /(.+)/;").Groups[1].Value;
-        return new Regex(literal);
+        var js = TestRepo.Read("wwwroot", "js", "request-worker.js");
+        return new Regex(Regex.Match(js, @"const ALLOWED = /(.+)/;").Groups[1].Value);
     });
 
     /// <summary>

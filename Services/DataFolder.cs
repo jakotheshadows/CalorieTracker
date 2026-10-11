@@ -30,6 +30,10 @@ public class DataFolder(IJSRuntime js)
     public ValueTask<MainFile> ReadMainAsync(bool withText) =>
         js.InvokeAsync<MainFile>("calTracker.dataFolder.readMain", withText);
 
+    /// <summary>A file in the folder root; null when it doesn't exist.</summary>
+    public ValueTask<string?> ReadFileAsync(string name) =>
+        js.InvokeAsync<string?>("calTracker.dataFolder.readFile", name);
+
     /// <summary>Writes a file in the folder root and returns its new last-modified time.</summary>
     public ValueTask<long> WriteFileAsync(string name, string text) =>
         js.InvokeAsync<long>("calTracker.dataFolder.writeFile", name, text);
