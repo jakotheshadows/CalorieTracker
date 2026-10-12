@@ -75,10 +75,13 @@ never silently overwrites it: it loads the change, or keeps that version as a se
 2. In CalTrack: **Settings → Data folder (Claude / MCP)**. Under **Claude Desktop**, click
    **Download CalTrack for Claude** (about 7 MB). This section appears once the folder is
    connected, and only on Windows.
-3. Open the downloaded `caltrack-windows.mcpb`. The first time, Windows asks which app to use —
-   choose **Claude**. Claude Desktop shows an install dialog — click **Install**.
-4. When it asks for the **CalTrack data folder**, choose the folder you connected in CalTrack
-   (section 2). It suggests `Documents\CalTrack`, so if that's where yours is, just confirm.
+3. In Claude Desktop, open **Settings → Extensions** (under *This computer*) and drag the
+   downloaded `caltrack-windows.mcpb` from File Explorer onto that page.
+   Don't double-click the file: Windows hands it to Claude, which attaches it to a new chat
+   instead of installing it.
+4. Click **Install**. When it asks for the **CalTrack data folder**, choose the folder you
+   connected in CalTrack (section 2). It suggests `Documents\CalTrack`, so if that's where yours
+   is, just confirm.
 5. Back in CalTrack, click **Check again**. It should say **Set up — Claude Desktop is running
    CalTrack for Claude**.
 
@@ -128,8 +131,8 @@ directly. One-off foods use numbers you give it — Claude is instructed never t
 also use **Settings → App updates → Check for updates**.
 
 **CalTrack for Claude:** when a new version comes with the app, **Settings → Data folder →
-Claude Desktop** says **Update available**. Download it again and open it; Claude Desktop
-replaces the old version.
+Claude Desktop** says **Update available**. Download it again and drag it onto Claude
+Desktop's **Settings → Extensions**, as when you installed it.
 
 If Claude ever says CalTrack needs updating, update the app.
 
@@ -140,7 +143,7 @@ If Claude ever says CalTrack needs updating, update the app.
 | Problem | Fix |
 | --- | --- |
 | No **Claude Desktop** section in CalTrack's Settings | Connect the data folder first (step 2), on Windows in Edge or Chrome. |
-| Opening the download doesn't bring up Claude Desktop | Install Claude Desktop first. Or open Claude Desktop's **Settings → Extensions** and install the file from there. |
+| Claude opened a chat with the file attached (or said the file is too big) | The file was double-clicked, which attaches it to a chat. Drag it onto Claude Desktop's **Settings → Extensions** page instead. |
 | Settings still says **Tell Claude what you ate…** after installing | Click **Check again**. If it doesn't change, make sure the CalTrack extension is enabled in Claude Desktop's **Settings → Extensions**. |
 | Claude finds an empty menu, or says the data folder doesn't exist | The extension points at a different folder. In Claude Desktop's **Settings → Extensions → CalTrack**, set the data folder to the one connected in CalTrack. |
 | *"CalTrack didn't answer within 20 seconds"* | Open CalTrack. If it shows **Reconnect folder**, click it. Then ask again. |
