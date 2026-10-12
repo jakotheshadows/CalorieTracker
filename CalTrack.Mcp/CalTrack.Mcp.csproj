@@ -12,6 +12,16 @@
     <AssemblyName>caltrack-mcp</AssemblyName>
   </PropertyGroup>
 
+  <!-- The Claude Desktop bundle (.github/workflows/deploy.yml) is a self-contained exe, trimmed
+       to stay small (12 MB rather than 36). Only framework assemblies are trimmed: this project
+       and CalTrack.Core depend on reflection (System.Text.Json, the MCP SDK's tool discovery), so
+       they stay whole and their trim warnings don't apply. -->
+  <PropertyGroup Condition="'$(PublishTrimmed)' == 'true'">
+    <TrimMode>partial</TrimMode>
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.10" />

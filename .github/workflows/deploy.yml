@@ -38,7 +38,7 @@ jobs:
             echo "::error::mcpb/manifest.json is version $HAVE but ServerStatus.CurrentVersion is $WANT"
             exit 1
           fi
-          dotnet publish CalTrack.Mcp -c Release -r win-x64 --self-contained \
+          dotnet publish CalTrack.Mcp -c Release -r win-x64 --self-contained -p:PublishTrimmed=true \
             -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=none \
             -o mcpb/server
           cp CalTrack.Mcp/mcpb/manifest.json CalTrack.Mcp/mcpb/icon.png mcpb/

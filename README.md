@@ -73,10 +73,10 @@ never silently overwrites it: it loads the change, or keeps that version as a se
 
 1. Install [Claude Desktop](https://claude.ai/download) if you haven't, and sign in.
 2. In CalTrack: **Settings → Data folder (Claude / MCP)**. Under **Claude Desktop**, click
-   **Download CalTrack for Claude** (about 30 MB). This section appears once the folder is
+   **Download CalTrack for Claude** (about 7 MB). This section appears once the folder is
    connected, and only on Windows.
-3. Open the downloaded `caltrack-windows.mcpb`. Claude Desktop shows an install dialog — click
-   **Install**.
+3. Open the downloaded `caltrack-windows.mcpb`. The first time, Windows asks which app to use —
+   choose **Claude**. Claude Desktop shows an install dialog — click **Install**.
 4. When it asks for the **CalTrack data folder**, choose the folder you connected in CalTrack
    (section 2). It suggests `Documents\CalTrack`, so if that's where yours is, just confirm.
 5. Back in CalTrack, click **Check again**. It should say **Set up — Claude Desktop is running
