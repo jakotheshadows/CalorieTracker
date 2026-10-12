@@ -59,7 +59,8 @@
                 </p>
                 <p class="muted small">
                     CalTrack saves everything to <code>caltrack-data.json</code> in that folder and picks
-                    up what Claude logs within a couple of seconds.
+                    up what Claude logs within a couple of seconds — up to a minute while CalTrack is in
+                    the background, or the next time you open it.
                 </p>
                 <div class="btn-row">
                     <ConfirmButton Label="Disconnect folder" OnConfirm="DisconnectFolderAsync" />
@@ -139,7 +140,11 @@
                 <span class="muted small update-status">@_usdaKeyStatus</span>
             }
         </div>
-        <p class="muted small">The key stays in this browser's storage only — it is never included in JSON exports.</p>
+        <p class="muted small">
+            The key stays in this browser's storage only — it is never included in JSON exports. When
+            you ask Claude to look a food up, CalTrack makes that USDA search with this key too, so
+            Claude never sees it.
+        </p>
     </div>
 
     <div class="card">
