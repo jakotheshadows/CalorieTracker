@@ -64,6 +64,7 @@ reading your day work whether it's open or not.
 | `log_adhoc` | Log a one-off food with nutrition the user gave. Refuses foods that are on the menu. |
 | `search_usda` | Search USDA FoodData Central for a food's nutrition (via the open CalTrack app). |
 | `add_menu_item` | Add a food to the menu — by USDA id (the server fetches the numbers itself, at the label serving or USDA's household portion), or with numbers the user gave. |
+| `add_recipe` | Add a recipe — several ingredients, each a USDA id (numbers fetched by the server, at a portion or amount) or numbers the user gave — for dishes no single USDA entry covers. Logged with `log_food` like any menu item. |
 
 Dates are `yyyy-MM-dd`, `today` or `yesterday`, in the user's local time zone.
 

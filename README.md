@@ -116,12 +116,14 @@ USDA lookups need CalTrack open because your USDA key stays in CalTrack; the ser
 
 ### What Claude can and can't do
 
-Claude can list your menu, read a day, log menu items and one-offs, search USDA, and add foods to
-your menu. It can't edit or delete entries, or change your goals, weights or recipes — do those
-in CalTrack.
+Claude can list your menu, read a day, log menu items and one-offs, search USDA, and add foods and
+recipes to your menu. A recipe covers dishes USDA has no single entry for — a brownie sundae can be
+a brownie plus a hot fudge sundae. Claude can't edit or delete entries, menu items or recipes, or
+change your goals or weights — do those in CalTrack.
 
-Claude can only log foods by their exact menu name, and foods it adds from USDA get USDA's numbers
-directly. One-off foods use numbers you give it — Claude is instructed never to estimate them.
+Claude can only log foods by their exact menu name, and foods and recipe ingredients it adds from
+USDA get USDA's numbers directly. One-offs and other ingredients use numbers you give it — Claude is
+instructed never to estimate them.
 
 ---
 

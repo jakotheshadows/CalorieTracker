@@ -51,7 +51,7 @@ public static class Inbox
     private static readonly JsonSerializerOptions OpJson = new() { WriteIndented = true };
 
     /// <summary>The op kinds this build applies. The app advertises it in <see cref="AppData.InboxKinds"/>.</summary>
-    public static readonly IReadOnlyList<string> SupportedKinds = new[] { InboxOp.LogFood, InboxOp.LogAdHoc, InboxOp.AddItem };
+    public static readonly IReadOnlyList<string> SupportedKinds = new[] { InboxOp.LogFood, InboxOp.LogAdHoc, InboxOp.AddItem, InboxOp.AddRecipe };
 
     /// <summary>Kinds every app version that has a data folder at all can apply.</summary>
     private static readonly string[] OriginalKinds = { InboxOp.LogFood, InboxOp.LogAdHoc };
@@ -134,6 +134,25 @@ public static class Inbox
                 copy.Name = name;
                 data.Items.Add(copy);
                 return ($"added {name} to the menu" + (copy.Calories is { } c ? $" ({Fmt(c)} kcal per {copy.ServingSize ?? "serving"})" : ""), null);
+            }
+            case InboxOp.AddRecipe:
+            {
+                // The same rules as the app's recipe editor (AppState.UpsertRecipeAsync / SaveIngredientAsync).
+                if (op.Recipe is not { } recipe || string.IsNullOrWhiteSpace(recipe.Name)) return (null, "missing recipe");
+                var name = recipe.Name.Trim();
+                if (!(recipe.Servings > 0) || double.IsInfinity(recipe.Servings)) return (null, $"bad servings {recipe.Servings}");
+                if (recipe.Ingredients.Count == 0) return (null, "a recipe needs at least one ingredient");
+                if (recipe.Ingredients.FirstOrDefault(i => string.IsNullOrWhiteSpace(i.Name) || i.AmountInBase is null) is { } bad)
+                    return (null, $"bad ingredient \"{bad.Name}\" ({bad.Amount} {bad.Unit})");
+                if (data.ResolveItem(name) is { } existing) return (null, $"\"{existing.Name}\" is already on the menu");
+                var copy = recipe.Clone();
+                copy.Name = name;
+                foreach (var ing in copy.Ingredients) ing.Name = ing.Name.Trim();
+                data.Recipes.Add(copy);
+                data.Recipes.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+                var perServing = copy.ToMenuItem().Calories;
+                return ($"added recipe {name} ({copy.Ingredients.Count} ingredient{(copy.Ingredients.Count == 1 ? "" : "s")}" +
+                        (perServing is { } k ? $", {Fmt(k)} kcal per serving" : "") + ")", null);
             }
             case InboxOp.LogAdHoc:
             {

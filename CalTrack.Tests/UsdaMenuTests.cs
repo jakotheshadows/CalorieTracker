@@ -299,6 +299,93 @@ public sealed class UsdaMenuTests : IDisposable
         Assert.Null(AppRequests.TryParseResponse("""{"Status":200}"""));       // no id: nobody's answer
     }
 
+    // ---------- recipes ----------
+
+    [Fact]
+    public void AddRecipe_op_adds_a_recipe_with_the_apps_rules()
+    {
+        var data = InboxTests.Menu();
+        var brownie = new RecipeIngredient { Name = "Brownie", Amount = 56, Unit = "g", CaloriesPer100 = 405 };
+
+        var (ok, _) = Inbox.Apply(data, RecipeOp("Brownie sundae", 1, brownie));
+        Assert.NotNull(ok);
+        Assert.Equal(227, data.ResolveItem("brownie sundae")!.Calories); // 405 × 0.56, one serving
+        Assert.Equal(new[] { "Brownie sundae", "Overnight oats" }, data.Recipes.Select(r => r.Name)); // kept sorted, as the app does
+
+        Assert.Contains("already on the menu", Inbox.Apply(data, RecipeOp("LARGE EGG", 1, brownie)).Error);      // an item
+        Assert.Contains("already on the menu", Inbox.Apply(data, RecipeOp("overnight oats", 1, brownie)).Error); // a recipe
+        Assert.Contains("at least one ingredient", Inbox.Apply(data, RecipeOp("Empty", 1)).Error);
+        Assert.Contains("bad servings", Inbox.Apply(data, RecipeOp("Zero", 0, brownie)).Error);
+        Assert.Contains("bad ingredient", Inbox.Apply(data, RecipeOp("Weightless", 1,
+            new RecipeIngredient { Name = "Air", Amount = 0, Unit = "g", CaloriesPer100 = 1 })).Error);
+    }
+
+    [Fact]
+    public async Task A_recipe_from_usda_and_user_ingredients_is_added_and_logged_end_to_end()
+    {
+        var result = JsonDocument.Parse(await CalTrackTools.AddRecipe(_store, Usda(), "Sandwich sundae",
+        [
+            new RecipeIngredientInput { UsdaFdcId = 172226 },                                                  // USDA: 1 serving, 70 g
+            new RecipeIngredientInput { Name = "Hot fudge", Amount = 40, Unit = "g", Calories = 140, CarbsG = 22 }, // the user's numbers
+        ])).RootElement;
+
+        var added = result.GetProperty("added");
+        Assert.Equal(306, added.GetProperty("perServing").GetProperty("calories").GetDouble()); // 165.9 + 140
+        var ingredients = result.GetProperty("ingredients").EnumerateArray().ToList();
+        Assert.Equal("1 serving (70 g)", ingredients[0].GetProperty("amount").GetString());
+        Assert.Equal("USDA #172226 Ice cream sandwich", ingredients[0].GetProperty("source").GetString());
+        Assert.Equal("user-provided", ingredients[1].GetProperty("source").GetString());
+
+        // Loggable straight away, like any menu item; the app then folds both ops in, in order.
+        var clock = new FixedClock(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.FromHours(-4)));
+        CalTrackTools.LogFood(_store, clock, "sandwich sundae", 1);
+        AppIngest();
+
+        var main = ReadMain();
+        var recipe = main.FindRecipe("Sandwich sundae")!;
+        Assert.Equal(2, recipe.Ingredients.Count);
+        Assert.Contains("fdc.nal.usda.gov/food-details/172226", recipe.Description);
+        Assert.Equal(306, main.TotalsForDay(Day).Calories);
+    }
+
+    [Fact]
+    public async Task Recipe_ingredients_must_be_grounded_and_nothing_is_written_otherwise()
+    {
+        async Task<string> Refusal(string name, params RecipeIngredientInput[] ingredients) =>
+            (await Assert.ThrowsAsync<McpException>(() => CalTrackTools.AddRecipe(_store, Usda(), name, ingredients.ToList()))).Message;
+
+        Assert.Contains("not both", await Refusal("A", new RecipeIngredientInput { UsdaFdcId = 172226, Calories = 100 }));
+        Assert.Contains("calories is required", await Refusal("B", new RecipeIngredientInput { Name = "Fudge", Amount = 40 }));
+        Assert.Contains("amount is required", await Refusal("C", new RecipeIngredientInput { Name = "Fudge", Calories = 140 }));
+        Assert.Contains("\"1 serving\"", await Refusal("D", new RecipeIngredientInput { UsdaFdcId = 172226, Portion = "1 sandwich" }));
+        Assert.Contains("at least one", await Refusal("E"));
+        Assert.Contains("already on the menu", await Refusal("Large egg", new RecipeIngredientInput { UsdaFdcId = 172226 }));
+        Assert.Equal(0, InboxCount());
+    }
+
+    [Fact]
+    public async Task Recipes_are_refused_while_the_app_is_too_old_to_add_them()
+    {
+        var data = ReadMain();
+        data.InboxKinds = new() { InboxOp.LogFood, InboxOp.LogAdHoc, InboxOp.AddItem }; // a version before recipes
+        WriteMain(data);
+
+        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.AddRecipe(_store, Usda(), "Sundae",
+            [new RecipeIngredientInput { UsdaFdcId = 172226 }]));
+
+        Assert.Contains("update it", ex.Message);
+        Assert.Equal(0, _app.Answered); // refused before asking USDA anything
+        Assert.Equal(0, InboxCount());
+    }
+
+    private static InboxOp RecipeOp(string name, double servings, params RecipeIngredient[] ingredients) => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        CreatedUtc = new DateTime(2026, 10, 7, 12, 0, 0, DateTimeKind.Utc),
+        Kind = InboxOp.AddRecipe,
+        Recipe = new Recipe { Name = name, Servings = servings, Ingredients = ingredients.ToList() },
+    };
+
     private static InboxOp AddOp(string name, double calories) => new()
     {
         Id = Guid.NewGuid().ToString("N"),
