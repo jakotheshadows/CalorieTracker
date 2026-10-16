@@ -72,6 +72,12 @@ public sealed class DataFolderStore(string? root)
     {
         var dir = Path.Combine(RequireRoot(), Inbox.DirName);
         Directory.CreateDirectory(dir);
+        // Ops apply in CreatedUtc order, and each was checked against the data with every
+        // pending op applied first — so it must sort after them, even when the clock hasn't
+        // moved since the last one (or went back).
+        var latest = Directory.EnumerateFiles(dir).Select(Path.GetFileName)
+            .Select(n => Inbox.CreatedOf(n!)).Where(t => t is not null).Max();
+        if (latest is { } last && op.CreatedUtc <= last) op.CreatedUtc = last.AddMilliseconds(1);
         var tmp = Path.Combine(dir, $".{op.Id}.tmp");
         var final = Path.Combine(dir, Inbox.FileNameFor(op));
         using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))

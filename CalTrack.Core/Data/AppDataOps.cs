@@ -7,7 +7,7 @@ namespace CalorieTracker.Data;
 /// Living here (not in the app's state service) is what keeps "log two eggs" meaning the
 /// same thing whether the user taps it in the app or an LLM asks for it over MCP.
 /// </summary>
-public static class AppDataOps
+public static partial class AppDataOps
 {
     public static FoodItem? FindItem(this AppData data, string name) =>
         data.Items.FirstOrDefault(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase));

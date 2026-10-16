@@ -169,6 +169,42 @@ public static partial class CalTrackTools
 
     // ---------- helpers ----------
 
+    private static InboxOp NewOp(string kind, TimeProvider clock) => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        CreatedUtc = clock.GetUtcNow().UtcDateTime,
+        Kind = kind,
+        Source = "mcp",
+    };
+
+    /// <summary>
+    /// Refuse an op the user's app can't apply yet: it would sit in the inbox until they
+    /// update, while the model told them it was done.
+    /// </summary>
+    private static void RequireAppSupports(FolderSnapshot snap, string kind, string doWhat)
+    {
+        if (!snap.MainExists || !Inbox.AppUnderstands(snap.View, kind))
+            throw new McpException(
+                $"The user's CalTrack app is a version that can't {doWhat} over MCP yet, so nothing was changed. Ask " +
+                "them to open CalTrack and update it (the \"Update now\" banner, or Settings → Check for updates).");
+    }
+
+    /// <summary>
+    /// Queue an op the way every edit goes: the app must understand it, it's tried first on
+    /// a copy of the current data with the code the app will run (so a change that would be
+    /// refused isn't queued), then written and read back. Returns what it will do.
+    /// </summary>
+    private static (FolderSnapshot After, string Status, string Summary) Submit(DataFolderStore store, FolderSnapshot snap, InboxOp op, string doWhat)
+    {
+        RequireAppSupports(snap, op.Kind, doWhat);
+        var (summary, error) = Inbox.Apply(AppDataJson.Clone(snap.View), op);
+        if (error is not null) throw new McpException($"Nothing was changed: {error}.");
+        var (after, status) = WriteVerified(store, op);
+        return (after, status, summary!);
+    }
+
+    private const string QueuedNote = "Queued for the CalTrack app, which applies it within seconds when open (otherwise next time it opens).";
+
     /// <summary>
     /// Write an op, then re-read the folder and confirm it's there — pending in the inbox,
     /// or already folded in by the app. Success is only reported for a write we can see.
@@ -208,11 +244,12 @@ public static partial class CalTrackTools
     private static object DayReport(FolderSnapshot snap, DateOnly day, TimeProvider clock)
     {
         var view = snap.View;
-        var entries = view.GetDay(day).Select(e =>
+        var entries = view.GetDay(day).Select((e, i) =>
         {
             var item = view.ResolveEntry(e);
             return new
             {
+                entry = i + 1,
                 name = e.ItemName,
                 servings = e.Servings,
                 calories = item?.Calories is { } c ? Round(c * e.Servings) : (double?)null,
@@ -226,9 +263,7 @@ public static partial class CalTrackTools
 
         var totals = view.TotalsForDay(day);
         var dayKey = AppData.DayKey(day);
-        var pending = snap.Pending.Where(p => p.Date == dayKey).Select(p => p.Kind == InboxOp.LogFood
-            ? $"{Fmt(p.Servings)} × {p.ItemName}"
-            : $"{Fmt(p.Servings)} × {p.AdHoc?.Name} (one-off)").ToList();
+        var pending = snap.Pending.Where(p => Inbox.ChangesDay(p, dayKey)).Select(Inbox.Describe).ToList();
         return new
         {
             date = dayKey,

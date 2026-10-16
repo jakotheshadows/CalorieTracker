@@ -51,7 +51,14 @@ public static class Inbox
     private static readonly JsonSerializerOptions OpJson = new() { WriteIndented = true };
 
     /// <summary>The op kinds this build applies. The app advertises it in <see cref="AppData.InboxKinds"/>.</summary>
-    public static readonly IReadOnlyList<string> SupportedKinds = new[] { InboxOp.LogFood, InboxOp.LogAdHoc, InboxOp.AddItem, InboxOp.AddRecipe };
+    public static readonly IReadOnlyList<string> SupportedKinds = new[]
+    {
+        InboxOp.LogFood, InboxOp.LogAdHoc, InboxOp.AddItem, InboxOp.AddRecipe,
+        InboxOp.UpdateEntry, InboxOp.RemoveEntry, InboxOp.ClearDay,
+        InboxOp.UpdateItem, InboxOp.DeleteItem, InboxOp.UpdateRecipe, InboxOp.DeleteRecipe,
+        InboxOp.SaveTemplate, InboxOp.ApplyTemplate, InboxOp.DeleteTemplate,
+        InboxOp.LogWeight, InboxOp.RemoveWeight, InboxOp.SetGoals, InboxOp.SetDays,
+    };
 
     /// <summary>Kinds every app version that has a data folder at all can apply.</summary>
     private static readonly string[] OriginalKinds = { InboxOp.LogFood, InboxOp.LogAdHoc };
@@ -66,6 +73,14 @@ public static class Inbox
     /// <summary>Lexically sortable, chronological, collision-free op file name.</summary>
     public static string FileNameFor(InboxOp op) =>
         $"{op.CreatedUtc:yyyyMMdd'T'HHmmssfff}-{op.Id}.json";
+
+    /// <summary>When an op file's op was created (to the millisecond, from its name), or null for other files.</summary>
+    public static DateTime? CreatedOf(string fileName) =>
+        IsOpFileName(fileName) && fileName.Length > 18
+        && DateTime.TryParseExact(fileName[..18], "yyyyMMdd'T'HHmmssfff", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var t)
+            ? t
+            : null;
 
     /// <summary>Only finished op files count: writers create ".{id}.tmp" first and rename.</summary>
     public static bool IsOpFileName(string name) =>
@@ -95,11 +110,15 @@ public static class Inbox
     /// </summary>
     public static (string? Summary, string? Error) Apply(AppData data, InboxOp op)
     {
-        // Logging ops target a day and an amount; adding a menu item has neither.
+        // Ops about a day carry its date; logging and changing servings carry an amount.
         var date = default(DateOnly);
-        if (op.Kind is InboxOp.LogFood or InboxOp.LogAdHoc)
+        if (op.Kind is InboxOp.LogFood or InboxOp.LogAdHoc or InboxOp.UpdateEntry or InboxOp.RemoveEntry or InboxOp.ClearDay
+            or InboxOp.SaveTemplate or InboxOp.ApplyTemplate or InboxOp.LogWeight or InboxOp.RemoveWeight)
         {
             if (!TryParseDay(op.Date, out date)) return (null, $"bad date \"{op.Date}\"");
+        }
+        if (op.Kind is InboxOp.LogFood or InboxOp.LogAdHoc or InboxOp.UpdateEntry)
+        {
             if (!(op.Servings > 0) || double.IsInfinity(op.Servings)) return (null, $"bad servings {op.Servings}");
         }
 
@@ -161,6 +180,87 @@ public static class Inbox
                 copy.Name = copy.Name.Trim();
                 data.AddAdHoc(date, copy, op.Servings);
                 return ($"{Fmt(op.Servings)} × {copy.Name} on {op.Date} (one-off)", null);
+            }
+            case InboxOp.UpdateEntry:
+            case InboxOp.RemoveEntry:
+            {
+                var name = op.ItemName?.Trim() ?? "";
+                var label = $"{name}{(op.OneOff ? " (one-off)" : "")} on {op.Date}";
+                // Addressed by name, not position: the user may have changed the day in the app since.
+                if (data.FindEntry(date, name, op.OneOff, op.Occurrence) is not { } entry)
+                    return (null, $"no entry {label}{(op.Occurrence > 1 ? $" #{op.Occurrence}" : "")} any more");
+                if (op.Kind == InboxOp.RemoveEntry)
+                {
+                    data.RemoveEntry(date, entry);
+                    return ($"removed {Fmt(entry.Servings)} × {label}", null);
+                }
+                var before = entry.Servings;
+                data.SetServings(date, entry, op.Servings);
+                return ($"{label}: {Fmt(before)} → {Fmt(op.Servings)} servings", null);
+            }
+            case InboxOp.ClearDay:
+            {
+                var removed = data.ClearDay(date);
+                return ($"cleared {op.Date} ({removed} entr{(removed == 1 ? "y" : "ies")})", null);
+            }
+            case InboxOp.UpdateItem:
+            {
+                if (op.ItemPatch is not { } patch) return (null, "missing changes");
+                var name = op.ItemName?.Trim() ?? "";
+                if (data.UpdateItem(name, patch) is { } error) return (null, error);
+                return ($"updated {name}" + (patch.NewName is { } n && !string.Equals(n.Trim(), name, StringComparison.OrdinalIgnoreCase) ? $" (now {n.Trim()})" : ""), null);
+            }
+            case InboxOp.DeleteItem:
+            case InboxOp.DeleteRecipe:
+            {
+                var name = op.ItemName?.Trim() ?? "";
+                var kept = op.Kind == InboxOp.DeleteItem ? data.DeleteItem(name) : data.DeleteRecipe(name);
+                if (kept is not { } n) return (null, $"\"{name}\" is not {(op.Kind == InboxOp.DeleteItem ? "a menu item" : "a recipe")}");
+                return ($"deleted {(op.Kind == InboxOp.DeleteItem ? "" : "recipe ")}{name}" + (n > 0 ? $" ({n} log entr{(n == 1 ? "y keeps its" : "ies keep their")} numbers as one-offs)" : ""), null);
+            }
+            case InboxOp.UpdateRecipe:
+            {
+                if (op.RecipePatch is not { } patch) return (null, "missing changes");
+                var name = op.ItemName?.Trim() ?? "";
+                if (data.UpdateRecipe(name, patch) is { } error) return (null, error);
+                return ($"updated recipe {name}" + (patch.NewName is { } n && !string.Equals(n.Trim(), name, StringComparison.OrdinalIgnoreCase) ? $" (now {n.Trim()})" : ""), null);
+            }
+            case InboxOp.SaveTemplate:
+            {
+                var name = op.TemplateName?.Trim() ?? "";
+                if (data.SaveTemplate(name, data.GetDay(date), op.Overwrite) is { } error) return (null, error);
+                return ($"saved {op.Date} as template {name}", null);
+            }
+            case InboxOp.ApplyTemplate:
+            {
+                if (data.ApplyTemplate(date, op.TemplateName ?? "") is { } error) return (null, $"{error} (\"{op.TemplateName}\")");
+                return ($"template {data.FindTemplate(op.TemplateName)} added to {op.Date}", null);
+            }
+            case InboxOp.DeleteTemplate:
+            {
+                var name = data.FindTemplate(op.TemplateName);
+                if (name is null || !data.DeleteTemplate(name)) return (null, $"no template named \"{op.TemplateName}\"");
+                return ($"deleted template {name}", null);
+            }
+            case InboxOp.LogWeight:
+            {
+                if (op.WeightKg is not { } kg || !data.LogWeight(date, kg)) return (null, $"bad weight {op.WeightKg}");
+                return ($"weight {Fmt(Math.Round(kg, 2))} kg on {op.Date}", null);
+            }
+            case InboxOp.RemoveWeight:
+                return data.RemoveWeight(date) ? ($"removed the weight logged on {op.Date}", null) : (null, $"no weight logged on {op.Date}");
+            case InboxOp.SetGoals:
+            {
+                if (op.GoalsPatch is not { } patch) return (null, "missing changes");
+                if (data.UpdateGoals(patch) is { } error) return (null, error);
+                return ("updated goals", null);
+            }
+            case InboxOp.SetDays:
+            {
+                if (op.Days is not { Count: > 0 } days) return (null, "no days to set");
+                if (days.Keys.FirstOrDefault(k => !TryParseDay(k, out _)) is { } bad) return (null, $"bad date \"{bad}\"");
+                var set = data.SetDays(days, op.Overwrite);
+                return ($"planned {set} day{(set == 1 ? "" : "s")}" + (set < days.Count ? $" ({days.Count - set} already had entries and were left alone)" : ""), null);
             }
             default:
                 return (null, $"unknown op kind \"{op.Kind}\"");
@@ -232,6 +332,38 @@ public static class Inbox
         foreach (var op in pending) Apply(view, op);
         return view;
     }
+
+    /// <summary>A few words saying what a queued op will do, for listing pending changes.</summary>
+    public static string Describe(InboxOp op) => op.Kind switch
+    {
+        InboxOp.LogFood => $"{Fmt(op.Servings)} × {op.ItemName}",
+        InboxOp.LogAdHoc => $"{Fmt(op.Servings)} × {op.AdHoc?.Name} (one-off)",
+        InboxOp.AddItem => $"add {op.Item?.Name} to the menu",
+        InboxOp.AddRecipe => $"add recipe {op.Recipe?.Name}",
+        InboxOp.UpdateEntry => $"{op.ItemName}{(op.OneOff ? " (one-off)" : "")} → {Fmt(op.Servings)} servings",
+        InboxOp.RemoveEntry => $"remove {op.ItemName}{(op.OneOff ? " (one-off)" : "")}",
+        InboxOp.ClearDay => "clear the day",
+        InboxOp.UpdateItem => $"update {op.ItemName}",
+        InboxOp.DeleteItem => $"delete {op.ItemName}",
+        InboxOp.UpdateRecipe => $"update recipe {op.ItemName}",
+        InboxOp.DeleteRecipe => $"delete recipe {op.ItemName}",
+        InboxOp.SaveTemplate => $"save as template {op.TemplateName}",
+        InboxOp.ApplyTemplate => $"add template {op.TemplateName}",
+        InboxOp.DeleteTemplate => $"delete template {op.TemplateName}",
+        InboxOp.LogWeight => $"weight {Fmt(Math.Round(op.WeightKg ?? 0, 2))} kg",
+        InboxOp.RemoveWeight => "remove the weight",
+        InboxOp.SetGoals => "update goals",
+        InboxOp.SetDays => "random plan",
+        _ => op.Kind,
+    };
+
+    /// <summary>Whether a queued op changes the log entries of the day <paramref name="dayKey"/>.</summary>
+    public static bool ChangesDay(InboxOp op, string dayKey) => op.Kind switch
+    {
+        InboxOp.LogFood or InboxOp.LogAdHoc or InboxOp.UpdateEntry or InboxOp.RemoveEntry or InboxOp.ClearDay or InboxOp.ApplyTemplate => op.Date == dayKey,
+        InboxOp.SetDays => op.Days?.ContainsKey(dayKey) == true,
+        _ => false,
+    };
 
     private static string Fmt(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
 }

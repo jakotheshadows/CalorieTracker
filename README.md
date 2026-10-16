@@ -99,6 +99,8 @@ Start a new chat in Claude Desktop and try:
 - *"Add an ice cream sandwich."* — a food that isn't on your menu yet: Claude searches USDA,
   adds it to your menu with USDA's numbers, and logs it.
 - *"What have I eaten today?"*
+- *"Actually make that two eggs, and take the cookie off."*
+- *"How did I do this week?"*
 
 Claude Desktop asks for your approval before it uses CalTrack's tools.
 
@@ -109,21 +111,36 @@ is in the background), with a **Via MCP:** notice — or the next time you open 
 
 | Asking Claude to… | CalTrack open? |
 | --- | --- |
-| Log food that's on your menu, log a one-off, read a day or your menu | No |
-| Search USDA or add a food from USDA | Yes — in the background is fine, with the folder connected and a USDA key saved |
+| Log, edit or read anything — days, menu, recipes, templates, weight, goals | No. Changes land the next time CalTrack opens. |
+| Search USDA, or add a food or recipe ingredient from USDA | Yes. In the background is fine, with the folder connected and a USDA key saved. |
 
 USDA lookups need CalTrack open because your USDA key stays in CalTrack; the server never has it.
 
 ### What Claude can and can't do
 
-Claude can list your menu, read a day, log menu items and one-offs, search USDA, and add foods and
-recipes to your menu. A recipe covers dishes USDA has no single entry for — a brownie sundae can be
-a brownie plus a hot fudge sundae. Claude can't edit or delete entries, menu items or recipes, or
-change your goals or weights — do those in CalTrack.
+Claude can do what you do in CalTrack:
 
-Claude can only log foods by their exact menu name, and foods and recipe ingredients it adds from
-USDA get USDA's numbers directly. One-offs and other ingredients use numbers you give it — Claude is
-instructed never to estimate them.
+- **Your log:** read any day or a range of days, log menu items and one-offs, change servings,
+  remove entries, clear a day.
+- **Your menu:** search USDA, add foods and recipes, edit them (rename, nutrition, servings,
+  ingredients) and delete them. A recipe covers dishes USDA has no single entry for.
+- **Templates:** save a day as a template, add a template to a day, delete one.
+- **Weight and goals:** log or remove a weigh-in, set up or change your goal, and see your progress
+  and suggested calories.
+- **Planning:** fill days with a random plan from your menu, like **Randomize**.
+
+Claude Desktop asks before Claude changes or deletes anything. Deleting a food or recipe keeps
+your history: days you logged it keep its numbers as one-offs, in the app as well.
+
+A few things stay in CalTrack:
+- **Import** and **Clear all data**, which replace or erase everything at once.
+- Your USDA key.
+- Connecting the data folder.
+- Barcode scanning.
+
+Claude can only log foods by their exact menu name. Foods and recipe ingredients it adds from USDA
+get USDA's numbers directly. Everything else uses numbers you give it; Claude is instructed never
+to estimate them.
 
 ---
 

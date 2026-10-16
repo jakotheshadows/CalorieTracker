@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "caltrack",
   "display_name": "CalTrack",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Log food in CalTrack by telling Claude what you ate.",
-  "long_description": "Connects Claude Desktop to your CalTrack data folder on this PC. Claude can read your menu and any day's log, log foods from your menu or one-offs you describe, and add foods and recipes to your menu from USDA FoodData Central. Your data stays in the folder. USDA lookups are made by the CalTrack app with the key saved in its Settings, so CalTrack must be open for those.",
+  "long_description": "Connects Claude Desktop to your CalTrack data folder on this PC, so Claude can do what you do in CalTrack: log food, change or remove what you logged, add, edit and delete menu items and recipes (with nutrition from USDA FoodData Central), save and use day templates, log your weight, set your goals, and plan random days. Your data stays in the folder. USDA lookups are made by the CalTrack app with the key saved in its Settings, so CalTrack must be open for those.",
   "author": {
     "name": "jakotheshadows",
     "url": "https://github.com/jakotheshadows"
@@ -35,8 +35,16 @@
       "description": "List the foods on your menu with per-serving nutrition."
     },
     {
+      "name": "get_menu_item",
+      "description": "Show everything about one menu item or recipe."
+    },
+    {
       "name": "get_day",
-      "description": "Show what's logged for a day, with totals."
+      "description": "Show what’s logged for a day, with totals."
+    },
+    {
+      "name": "get_summary",
+      "description": "Totals and averages over a range of days."
     },
     {
       "name": "log_food",
@@ -47,16 +55,80 @@
       "description": "Log a one-off food with nutrition you give."
     },
     {
+      "name": "update_entry",
+      "description": "Change the servings of a logged entry."
+    },
+    {
+      "name": "remove_entry",
+      "description": "Remove an entry from a day’s log."
+    },
+    {
+      "name": "clear_day",
+      "description": "Remove everything logged on a day."
+    },
+    {
       "name": "search_usda",
       "description": "Search USDA FoodData Central (through the open CalTrack app)."
     },
     {
       "name": "add_menu_item",
-      "description": "Add a food to your menu, with USDA's numbers or yours."
+      "description": "Add a food to your menu, with USDA’s numbers or yours."
+    },
+    {
+      "name": "update_menu_item",
+      "description": "Rename or edit a menu item."
+    },
+    {
+      "name": "delete_menu_item",
+      "description": "Delete a menu item (logged days keep its numbers)."
     },
     {
       "name": "add_recipe",
       "description": "Add a recipe made of USDA ingredients or ones you give."
+    },
+    {
+      "name": "update_recipe",
+      "description": "Rename a recipe or change its servings or ingredients."
+    },
+    {
+      "name": "delete_recipe",
+      "description": "Delete a recipe (logged days keep its numbers)."
+    },
+    {
+      "name": "list_templates",
+      "description": "List your day templates."
+    },
+    {
+      "name": "save_template",
+      "description": "Save a day’s entries as a template."
+    },
+    {
+      "name": "apply_template",
+      "description": "Add a template’s entries to a day."
+    },
+    {
+      "name": "delete_template",
+      "description": "Delete a day template."
+    },
+    {
+      "name": "get_goals",
+      "description": "Show your goal, progress and suggested calories."
+    },
+    {
+      "name": "set_goals",
+      "description": "Set up or change your weight goal and profile."
+    },
+    {
+      "name": "log_weight",
+      "description": "Record your weight for a day."
+    },
+    {
+      "name": "remove_weight",
+      "description": "Remove a day’s weigh-in."
+    },
+    {
+      "name": "plan_random_days",
+      "description": "Plan days at random from your menu, like Randomize."
     }
   ],
   "user_config": {

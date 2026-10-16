@@ -56,22 +56,41 @@ direction (`C->S` client to server, `S->C` back), message. It's off by default b
 messages include what you log. In the Claude Desktop bundle it's the extension's **Record
 protocol traffic** setting.
 
-The server needs no USDA key. `search_usda` and `add_menu_item` ask the CalTrack app to do
-the lookup with the key you saved in its Settings — so for those two, CalTrack must be open
-in the browser (in the background is fine) with its data folder connected. Logging and
-reading your day work whether it's open or not.
+The server needs no USDA key. `search_usda`, and adding foods or recipe ingredients by USDA id,
+ask the CalTrack app to do the lookup with the key you saved in its Settings. For those, CalTrack
+must be open in the browser (in the background is fine) with its data folder connected.
+Everything else works whether it's open or not, and lands when it next opens.
 
 ## Tools
 
-| Tool | What it does |
-| --- | --- |
-| `list_menu_items` | The user's menu (items + recipes) with per-serving nutrition — the only names `log_food` accepts. |
-| `get_day` | One day's entries and totals, including ones queued but not yet seen by the app. |
-| `log_food` | Log servings of a **menu** item. Unknown names fail with the closest real names. |
-| `log_adhoc` | Log a one-off food with nutrition the user gave. Refuses foods that are on the menu. |
-| `search_usda` | Search USDA FoodData Central for a food's nutrition (via the open CalTrack app). |
-| `add_menu_item` | Add a food to the menu — by USDA id (the server fetches the numbers itself, at the label serving or USDA's household portion), or with numbers the user gave. |
-| `add_recipe` | Add a recipe — several ingredients, each a USDA id (numbers fetched by the server, at a portion or amount) or numbers the user gave — for dishes no single USDA entry covers. Logged with `log_food` like any menu item. |
+Everything a user does in CalTrack, except import and clear-all, the USDA key, connecting the
+folder, and barcode scanning.
+
+| Area | Tool | What it does |
+| --- | --- | --- |
+| Menu | `list_menu_items` | The menu (items + recipes) with per-serving nutrition — the only names `log_food` accepts. |
+| | `get_menu_item` | One item or recipe in full: every nutrient, a recipe's ingredients, where it's used. |
+| | `add_menu_item` | Add a food — by USDA id (the server fetches the numbers, at the label serving or USDA's household portion), or with numbers the user gave. |
+| | `update_menu_item` | Rename or edit an item; only the fields passed change. |
+| | `delete_menu_item` | Delete an item; logged days keep its numbers as one-offs. |
+| | `add_recipe` | Add a recipe of ingredients, each a USDA id (numbers fetched by the server) or numbers the user gave. |
+| | `update_recipe` | Rename a recipe, change its servings, or remove, re-amount and add ingredients. |
+| | `delete_recipe` | Delete a recipe; logged days keep its numbers. The result has its ingredients, to add it back. |
+| | `search_usda` | Search USDA FoodData Central (via the open CalTrack app). |
+| Log | `get_day` | One day's numbered entries and totals, including changes queued but not yet applied. |
+| | `get_summary` | Totals, per-day numbers and averages over a range of days. |
+| | `log_food` | Log servings of a **menu** item. Unknown names fail with the closest real names. |
+| | `log_adhoc` | Log a one-off with nutrition the user gave. Refuses foods that are on the menu. |
+| | `update_entry` | Change an entry's servings. |
+| | `remove_entry` | Remove an entry; the result has what it was, to log it again. |
+| | `clear_day` | Remove a day's entries. |
+| Templates | `list_templates`, `save_template`, `apply_template`, `delete_template` | Day templates, as on the Schedule page. |
+| Goals | `get_goals` | Profile, adaptive maintenance calories, suggested calories, trend weight, expected date, recent weigh-ins. |
+| | `set_goals` | Set up or change the goal, with the app's limits (no target below a healthy weight). |
+| | `log_weight`, `remove_weight` | The weight log, in the user's units. |
+| Planning | `plan_random_days` | The app's Randomize: plans days from the menu toward a calorie target. |
+
+Edits, deletes and plans are annotated `destructiveHint`, so clients ask before running them.
 
 Dates are `yyyy-MM-dd`, `today` or `yesterday`, in the user's local time zone.
 
@@ -116,6 +135,27 @@ so no lookup logic lives in JavaScript.
 data file; the server won't queue a newer kind (like `add_item`) until the app says it can
 apply it, and an app that meets an unknown kind leaves it in the inbox for a newer version
 instead of consuming it.
+
+**Edits are patches, tried before they're sent.** An edit carries only what changes, never a whole
+item, so a change the user makes in the app before the edit arrives isn't overwritten. The server
+first applies each op to a copy of the current view with Core's code. One the app would refuse is
+refused right there, in words the model can act on, instead of being queued and dropped. Ops
+apply in creation order, and the server stamps each one after every op already waiting.
+An "apply template" and a "delete template" sent in the same millisecond still land in that order.
+
+**Entries are found again by name, not position.** The user may change a day between the model
+reading it and the app applying the edit. So an entry op names the entry: its name, whether it's
+a one-off, and which of the same-named ones. Regular entries merge by name, so only repeated
+one-offs need the number. If that entry is gone, the op is rejected rather than hitting a
+neighbour.
+
+**The model is told what was undone.** Every delete returns what it removed, in the form needed
+to add it back: a removed one-off's numbers, or a deleted recipe's ingredients in `add_recipe`'s
+manual form. Deleting a menu item or recipe keeps history: its log entries become one-offs with
+the same numbers, in the app too, so past totals never change.
+
+**Random plans are generated by the server.** The planner is Core code. The server runs it and
+sends the app the concrete days, so the plan Claude describes is the plan that lands.
 
 **Tools for a model, not a person.** Ground, don't guess: `log_food` won't log a name that isn't
 on the menu, and never fuzzy-matches silently — it returns suggestions and makes the model pick

@@ -412,7 +412,7 @@ public sealed class UsdaMenuTests : IDisposable
     /// removes the request. Error and FoodStatus simulate an app without a key and USDA
     /// failing; Paths records what was asked for.
     /// </summary>
-    private sealed class FakeApp : IDisposable
+    internal sealed class FakeApp : IDisposable
     {
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _loop;
