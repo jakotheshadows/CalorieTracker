@@ -47,11 +47,19 @@ public sealed class ClaudeBundleTests : IDisposable
 
         Assert.Equal("binary", server.GetProperty("type").GetString());
         Assert.Equal("${__dirname}/" + server.GetProperty("entry_point").GetString(), config.GetProperty("command").GetString());
-        Assert.Equal(new[] { "--data-dir", "${user_config.data_dir}" }, config.GetProperty("args").EnumerateArray().Select(a => a.GetString()));
+        Assert.Equal(
+            new[] { "--data-dir", "${user_config.data_dir}", "--trace-protocol", "${user_config.trace_protocol}" },
+            config.GetProperty("args").EnumerateArray().Select(a => a.GetString()));
 
         var folder = m.GetProperty("user_config").GetProperty("data_dir");
         Assert.Equal("directory", folder.GetProperty("type").GetString());
         Assert.True(folder.GetProperty("required").GetBoolean());
+
+        // Recording the traffic is opt-in: it holds what the user logs.
+        var trace = m.GetProperty("user_config").GetProperty("trace_protocol");
+        Assert.Equal("boolean", trace.GetProperty("type").GetString());
+        Assert.False(trace.GetProperty("default").GetBoolean());
+        Assert.False(trace.GetProperty("required").GetBoolean());
 
         // The download is offered on Windows only, and Claude Desktop enforces the same.
         Assert.Equal(new[] { "win32" }, m.GetProperty("compatibility").GetProperty("platforms").EnumerateArray().Select(p => p.GetString()));

@@ -49,6 +49,13 @@ claude mcp add caltrack -- ~/caltrack-mcp/caltrack-mcp --data-dir ~/Documents/Ca
 
 (`CALTRACK_DATA_DIR` works instead of `--data-dir`.)
 
+**Seeing the protocol.** Add `--trace-protocol true` (or set `CALTRACK_TRACE_PROTOCOL=true`) and
+each server process records every JSON-RPC message, exactly as sent, in
+`mcp-trace/<start time>-<pid>.log` in the data folder: one line per message — UTC time,
+direction (`C->S` client to server, `S->C` back), message. It's off by default because the
+messages include what you log. In the Claude Desktop bundle it's the extension's **Record
+protocol traffic** setting.
+
 The server needs no USDA key. `search_usda` and `add_menu_item` ask the CalTrack app to do
 the lookup with the key you saved in its Settings — so for those two, CalTrack must be open
 in the browser (in the background is fine) with its data folder connected. Logging and

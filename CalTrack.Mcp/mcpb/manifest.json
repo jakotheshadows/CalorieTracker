@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "caltrack",
   "display_name": "CalTrack",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Log food in CalTrack by telling Claude what you ate.",
   "long_description": "Connects Claude Desktop to your CalTrack data folder on this PC. Claude can read your menu and any day's log, log foods from your menu or one-offs you describe, and add foods and recipes to your menu from USDA FoodData Central. Your data stays in the folder. USDA lookups are made by the CalTrack app with the key saved in its Settings, so CalTrack must be open for those.",
   "author": {
@@ -22,7 +22,9 @@
       "command": "${__dirname}/server/caltrack-mcp.exe",
       "args": [
         "--data-dir",
-        "${user_config.data_dir}"
+        "${user_config.data_dir}",
+        "--trace-protocol",
+        "${user_config.trace_protocol}"
       ],
       "env": {}
     }
@@ -64,6 +66,13 @@
       "description": "The folder connected in CalTrack: Settings, Data folder.",
       "required": true,
       "default": "${DOCUMENTS}/CalTrack"
+    },
+    "trace_protocol": {
+      "type": "boolean",
+      "title": "Record protocol traffic",
+      "description": "Save every message between Claude and CalTrack in the mcp-trace folder inside your data folder, for troubleshooting. The files include what you log.",
+      "required": false,
+      "default": false
     }
   },
   "compatibility": {

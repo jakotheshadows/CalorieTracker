@@ -7,8 +7,8 @@ using Microsoft.Extensions.Logging;
 // CalTrack MCP server (stdio). The MCP client launches this process; stdout carries the
 // protocol, so all logging goes to stderr.
 //
-//   caltrack-mcp --data-dir "C:\Users\me\Documents\CalTrack"
-//   (or set CALTRACK_DATA_DIR)
+//   caltrack-mcp --data-dir "C:\Users\me\Documents\CalTrack" [--trace-protocol true]
+//   (or set CALTRACK_DATA_DIR, CALTRACK_TRACE_PROTOCOL)
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
@@ -22,12 +22,29 @@ builder.Services.AddSingleton(TimeProvider.System);
 // user's USDA key, so the server has none.
 builder.Services.AddSingleton(sp => new UsdaGateway(sp.GetRequiredService<DataFolderStore>()));
 
-builder.Services
-    .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = ServerStatus.CurrentVersion })
-    .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+// Opt-in: record every protocol message in the data folder's mcp-trace/ (Claude Desktop's
+// "Record protocol traffic" setting passes --trace-protocol true).
+ProtocolTrace? trace = null;
+Exception? traceFailure = null;
+if (ProtocolTrace.IsOn(ArgValue(args, "--trace-protocol") ?? Environment.GetEnvironmentVariable("CALTRACK_TRACE_PROTOCOL"))
+    && Directory.Exists(dataDir))
+{
+    try { trace = ProtocolTrace.Start(dataDir); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { traceFailure = ex; }
+}
+
+var mcp = builder.Services
+    .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = ServerStatus.CurrentVersion });
+if (trace is null)
+    mcp.WithStdioServerTransport();
+else
+    mcp.WithStreamServerTransport(trace.Incoming(Console.OpenStandardInput()), trace.Outgoing(Console.OpenStandardOutput()));
+mcp.WithToolsFromAssembly();
 
 var app = builder.Build();
+var log = app.Services.GetRequiredService<ILogger<ProtocolTrace>>();
+if (trace is not null) log.LogInformation("Recording protocol traffic to {File}", trace.FilePath);
+if (traceFailure is not null) log.LogWarning(traceFailure, "Couldn't start the protocol trace; running without it");
 
 // Let the app's Settings show that Claude is set up, and with which version. Best effort:
 // a missing or misconfigured folder is reported by the tools themselves, in words the model
@@ -45,6 +62,7 @@ if (Directory.Exists(dataDir))
 }
 
 await app.RunAsync();
+trace?.Dispose();
 
 static string? ArgValue(string[] args, string name)
 {
