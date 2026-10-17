@@ -14,7 +14,7 @@ public sealed class ServerStatus
     /// The server version this build ships. The Claude Desktop bundle's manifest
     /// (CalTrack.Mcp/mcpb/manifest.json) carries the same number; a test keeps them equal.
     /// </summary>
-    public const string CurrentVersion = "0.7.1";
+    public const string CurrentVersion = "0.7.2";
 
     public const string FileName = "caltrack-mcp.json";
 

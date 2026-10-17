@@ -48,6 +48,9 @@ public class AppResponse
 
     /// <summary>USDA's reply, verbatim.</summary>
     public string? Body { get; set; }
+
+    /// <summary>How long the app's fetch from USDA took, in milliseconds. Older apps leave it out.</summary>
+    public int? FetchMs { get; set; }
 }
 
 public static class AppRequests

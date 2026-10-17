@@ -96,19 +96,37 @@ public static class UsdaClient
         using (doc) return (ParseDetailFood(doc.RootElement), null);
     }
 
+    // ---------- Failures worth asking again ----------
+
+    /// <summary>
+    /// Whether asking again could get a different answer. Now and then USDA's web server answers
+    /// a valid request with a bare nginx "400 Bad Request" page, and the same request works
+    /// seconds later: on 2026-10-17 over half of one run's searches got it. Gateway errors
+    /// (502-504) pass too. A 400 in JSON is the API objecting to the request itself, and 429 is
+    /// the rate limit, so asking again can't help those.
+    /// </summary>
+    public static bool IsTransient(int status, string? body) =>
+        status is 502 or 503 or 504 || (status == 400 && IsHtml(body));
+
+    /// <summary>The waits before each retry of a <see cref="IsTransient"/> failure: two retries, after 1 s and 2 s.</summary>
+    public static readonly IReadOnlyList<TimeSpan> RetryDelays = new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2) };
+
+    private static bool IsHtml(string? body) => body?.TrimStart().StartsWith('<') == true;
+
     // ---------- The app's own lookups (it holds the key) ----------
 
+    /// <param name="retryDelays">Waits before retrying a transient failure; <see cref="RetryDelays"/> by default.</param>
     public static async Task<(List<UsdaFood>? Results, string? Error)> SearchAsync(
-        HttpClient http, string key, string query, int pageSize, string keyHint = "")
+        HttpClient http, string key, string query, int pageSize, string keyHint = "", IReadOnlyList<TimeSpan>? retryDelays = null)
     {
         if (string.IsNullOrWhiteSpace(query)) return (new List<UsdaFood>(), null);
-        var (status, body) = await GetAsync(http, Url(SearchPath(query, pageSize), key));
+        var (status, body) = await GetAsync(http, Url(SearchPath(query, pageSize), key), retryDelays ?? RetryDelays);
         return ReadSearch(status, body, keyHint);
     }
 
     /// <summary>Look up a scanned/typed GTIN/UPC. Matches on FDC's gtinUpc, ignoring leading zeros.</summary>
     public static async Task<(UsdaFood? Food, string? Error)> LookupBarcodeAsync(
-        HttpClient http, string key, string code, string keyHint = "")
+        HttpClient http, string key, string code, string keyHint = "", IReadOnlyList<TimeSpan>? retryDelays = null)
     {
         var digits = new string(code.Where(char.IsDigit).ToArray());
         if (digits.Length < 8) return (null, "That doesn't look like a product barcode.");
@@ -136,7 +154,7 @@ public static class UsdaClient
         string? lastError = null;
         foreach (var candidate in candidates.Distinct())
         {
-            var (results, error) = await SearchAsync(http, key, candidate, 10, keyHint);
+            var (results, error) = await SearchAsync(http, key, candidate, 10, keyHint, retryDelays);
             if (error is not null) { lastError = error; continue; }
             var match = results!.FirstOrDefault(f =>
                 f.GtinUpc is { } gtin && accepted.Contains(new string(gtin.Where(char.IsDigit).ToArray()).TrimStart('0')));
@@ -176,7 +194,17 @@ public static class UsdaClient
         return (char)('0' + (10 - sum % 10) % 10);
     }
 
-    private static async Task<(int Status, string? Body)> GetAsync(HttpClient http, string url)
+    private static async Task<(int Status, string? Body)> GetAsync(HttpClient http, string url, IReadOnlyList<TimeSpan> retryDelays)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var (status, body) = await GetOnceAsync(http, url);
+            if (attempt >= retryDelays.Count || !IsTransient(status, body)) return (status, body);
+            await Task.Delay(retryDelays[attempt]);
+        }
+    }
+
+    private static async Task<(int Status, string? Body)> GetOnceAsync(HttpClient http, string url)
     {
         try
         {
@@ -200,9 +228,12 @@ public static class UsdaClient
         if (status == (int)HttpStatusCode.NotFound && notFound is not null)
             return (null, notFound);
         if (status is < 200 or > 299)
-            return (null, ErrorReason(body) is { } reason
+        {
+            var error = ErrorReason(body) is { } reason
                 ? $"USDA API error (HTTP {status}): {reason}"
-                : $"USDA API error (HTTP {status}).");
+                : $"USDA API error (HTTP {status}).";
+            return (null, IsTransient(status, body) ? error + " This happens now and then; try again in a moment." : error);
+        }
         try
         {
             return (JsonDocument.Parse(body ?? ""), null);
@@ -218,7 +249,7 @@ public static class UsdaClient
     /// a JSON reply's message (api.data.gov nests it as {"error":{"message"}}), else the text
     /// itself. One line, capped, with any api_key value masked. Null when there's nothing useful.
     /// </summary>
-    private static string? ErrorReason(string? body)
+    public static string? ErrorReason(string? body)
     {
         if (string.IsNullOrWhiteSpace(body)) return null;
         var reason = body;
@@ -237,13 +268,13 @@ public static class UsdaClient
         }
         catch (JsonException) { }
 
-        // An HTML page comes from the web server in front of the API (nginx), not the API itself:
-        // say so, with the page's title.
-        if (reason.TrimStart().StartsWith('<'))
+        // An HTML page is a web server's error page (nginx), not the API's own JSON. The page
+        // doesn't say which of the servers in front of the API sent it, only its title.
+        if (IsHtml(reason))
         {
             var title = Regex.Match(reason, @"<title>\s*(.*?)\s*</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
             return title.Success && title.Groups[1].Value.Length > 0
-                ? $"USDA's web server rejected the request before it reached the API (\"{title.Groups[1].Value}\")."
+                ? $"USDA's web server answered with an error page (\"{title.Groups[1].Value}\")."
                 : null;
         }
         reason = Regex.Replace(reason, @"api_key=[^&\s""']+", "api_key=***",

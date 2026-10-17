@@ -52,7 +52,10 @@ claude mcp add caltrack -- ~/caltrack-mcp/caltrack-mcp --data-dir ~/Documents/Ca
 **Seeing the protocol.** Add `--trace-protocol true` (or set `CALTRACK_TRACE_PROTOCOL=true`) and
 each server process records every JSON-RPC message, exactly as sent, in
 `mcp-trace/<start time>-<pid>.log` in the data folder: one line per message — UTC time,
-direction (`C->S` client to server, `S->C` back), message. It's off by default because the
+direction (`C->S` client to server, `S->C` back), message. Lines marked `USDA` are the
+server's own: one per USDA fetch it asks the app for, with the path, attempt, outcome, USDA's
+status and reason, and how long the server waited and the app's fetch took. A tool result only
+shows how a lookup ended; these show every try. It's off by default because the
 messages include what you log. In the Claude Desktop bundle it's the extension's **Record
 protocol traffic** setting.
 
@@ -152,6 +155,15 @@ the background — and browsers throttle a background page's timers to one wake-
 aren't throttled (measured: every 1.0 s while the page's slowed to once a minute), so a worker
 watches `requests/` and replies in about a second. It stays thin on purpose — a keyed fetch —
 so no lookup logic lives in JavaScript.
+
+**USDA's chance failures are asked again.** Now and then USDA's web server answers a valid
+request with a bare nginx "400 Bad Request" page. In one run of 20 agents, 62 of the 108
+searches USDA answered got it, and the same request worked seconds later. So a lookup that gets
+that page, or a 502-504, is asked again after 1 s and then 2 s, within the same 20-second wait
+and only while there's a second left for the app to answer; if time runs out, the error is
+USDA's answer, not a timeout. A 400 in JSON (the API objecting
+to the request) and a 429 (the rate limit) aren't retried. The rule is Core's
+(`UsdaClient.IsTransient`), so the app's own lookups retry the same way.
 
 **Old app versions can't lose new ops.** The app records the op kinds it understands in the
 data file; the server won't queue a newer kind (like `add_item`) until the app says it can

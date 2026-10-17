@@ -12,6 +12,11 @@ namespace CalTrack.Mcp;
 /// what the user logs.
 /// </summary>
 /// <remarks>
+/// Between the messages are lines of the server's own, direction <see cref="UsdaLookup"/>: one
+/// per USDA fetch it asks the app for (<see cref="UsdaGateway"/>), since those never cross
+/// the protocol. A tool result shows only how a lookup ended; these show each attempt.
+/// </remarks>
+/// <remarks>
 /// It taps the transport's streams rather than the SDK's messages, so what it records is the
 /// bytes on the wire, not a re-serialization. A failure to write the trace never reaches the
 /// protocol: the bytes pass through first.
@@ -21,6 +26,7 @@ public sealed class ProtocolTrace : IDisposable
     public const string FolderName = "mcp-trace";
     public const string ClientToServer = "C->S";
     public const string ServerToClient = "S->C";
+    public const string UsdaLookup = "USDA";
 
     private readonly StreamWriter _writer;
     private readonly TimeProvider _time;
@@ -51,9 +57,14 @@ public sealed class ProtocolTrace : IDisposable
     /// <summary>The server's messages: the server writes them to this stream.</summary>
     public Stream Outgoing(Stream output) => new Tap(output, this, ServerToClient);
 
-    private void Record(string direction, ReadOnlySpan<byte> line)
+    /// <summary>One USDA fetch made for this server: a JSON object on one line (see <see cref="UsdaGateway"/>).</summary>
+    public void RecordUsda(string json) => Record(UsdaLookup, json);
+
+    private void Record(string direction, ReadOnlySpan<byte> line) => Record(direction, Encoding.UTF8.GetString(line));
+
+    private void Record(string direction, string text)
     {
-        var text = Encoding.UTF8.GetString(line).TrimEnd('\r');
+        text = text.TrimEnd('\r');
         if (text.Length == 0) return;
         var stamp = _time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
         lock (_gate)

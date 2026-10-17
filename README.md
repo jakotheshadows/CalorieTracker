@@ -209,8 +209,8 @@ publishes it at `downloads/caltrack-windows.mcpb` next to the app.
 
 To see exactly what Claude Desktop and the server say to each other, turn on **Record protocol
 traffic** in Claude Desktop's **Settings → Extensions → CalTrack**. Each server process then
-writes every JSON-RPC message to `mcp-trace\` in your data folder. Turn it off when you're done:
-the files include what you log.
+writes every JSON-RPC message, and each USDA lookup the app makes for it, to `mcp-trace\` in
+your data folder. Turn it off when you're done: the files include what you log.
 
 To run the server from source instead (needs the [.NET 9 SDK](https://dotnet.microsoft.com/download)):
 

@@ -15,6 +15,11 @@ public sealed class UsdaMenuTests : IDisposable
     private static readonly string Fixtures = Path.Combine(AppContext.BaseDirectory, "Fixtures");
     private static readonly DateOnly Day = new(2026, 10, 7);
 
+    /// <summary>The page USDA's web server sent for over half of one run's searches (captured 2026-10-17).</summary>
+    internal static readonly string NginxPage = File.ReadAllText(Path.Combine(Fixtures, "usda-nginx-400.html"));
+
+    private static readonly TimeSpan[] NoWait = { TimeSpan.Zero, TimeSpan.Zero };
+
     private readonly string _dir = Directory.CreateTempSubdirectory("caltrack-usda-test-").FullName;
     private readonly DataFolderStore _store;
     private readonly FakeApp _app;
@@ -39,7 +44,10 @@ public sealed class UsdaMenuTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 
-    private UsdaGateway Usda(double timeoutSeconds = 5) => new(_store, TimeSpan.FromSeconds(timeoutSeconds));
+    private UsdaGateway Usda(double timeoutSeconds = 5, IReadOnlyList<TimeSpan>? retryDelays = null, ProtocolTrace? trace = null) =>
+        new(_store, TimeSpan.FromSeconds(timeoutSeconds), retryDelays ?? NoWait, trace);
+
+    private List<string> Searches() { lock (_app.Paths) return _app.Paths.Where(p => p.StartsWith("foods/search?")).ToList(); }
 
     private void WriteMain(AppData data) => File.WriteAllText(MainPath, AppDataJson.Serialize(data, indented: true));
 
@@ -97,9 +105,13 @@ public sealed class UsdaMenuTests : IDisposable
         Assert.Equal("USDA API error (HTTP 400): Invalid dataType", UsdaClient.ReadSearch(400, """{"error":"Bad Request","message":"Invalid dataType"}""").Error);
         Assert.Equal("USDA API error (HTTP 400): Bad thing", UsdaClient.ReadSearch(400, """{"error":{"code":"X","message":"Bad thing"}}""").Error);
         Assert.Equal("USDA API error (HTTP 400): bad query at /search?api_key=***", UsdaClient.ReadSearch(400, "bad  query\nat /search?api_key=SECRET123").Error);
-        Assert.Equal("USDA API error (HTTP 502).", UsdaClient.ReadSearch(502, "<html><body>Bad Gateway</body></html>").Error);
-        Assert.Equal("""USDA API error (HTTP 400): USDA's web server rejected the request before it reached the API ("400 Bad Request").""",
-            UsdaClient.ReadSearch(400, "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body><center>nginx</center></body></html>").Error);
+        // Failures that pass by chance say so; others don't promise that trying again helps.
+        Assert.Equal("USDA API error (HTTP 502). This happens now and then; try again in a moment.",
+            UsdaClient.ReadSearch(502, "<html><body>Bad Gateway</body></html>").Error);
+        Assert.Equal("""USDA API error (HTTP 400): USDA's web server answered with an error page ("400 Bad Request"). This happens now and then; try again in a moment.""",
+            UsdaClient.ReadSearch(400, NginxPage).Error);
+        Assert.Equal("""USDA API error (HTTP 500): USDA's web server answered with an error page ("500 Internal Server Error").""",
+            UsdaClient.ReadSearch(500, "<html><head><title>500 Internal Server Error</title></head></html>").Error);
         Assert.EndsWith("…", UsdaClient.ReadSearch(400, new string('x', 500)).Error);
         Assert.Contains("couldn't be read", UsdaClient.ReadSearch(200, "<html>").Error);
         Assert.Equal("USDA has no food with id 5.", UsdaClient.ReadFood(404, "", 5).Error);
@@ -290,6 +302,175 @@ public sealed class UsdaMenuTests : IDisposable
         var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(), "ice cream sandwich"));
         Assert.Contains("update it", ex.Message);
         Assert.False(Directory.Exists(Path.Combine(_dir, AppRequests.RequestsDir)));
+    }
+
+    // ---------- USDA's chance failures ----------
+
+    [Theory]
+    [InlineData(400, "html", true)]   // USDA's web server's error page: the same request works seconds later
+    [InlineData(502, "", true)]
+    [InlineData(503, "html", true)]
+    [InlineData(504, "", true)]
+    [InlineData(400, "json", false)]  // the API objecting to the request itself
+    [InlineData(429, "", false)]      // the rate limit: asking again only makes it worse
+    [InlineData(403, "", false)]
+    [InlineData(404, "", false)]
+    [InlineData(500, "", false)]
+    [InlineData(0, "", false)]        // unreachable: offline
+    [InlineData(200, "json", false)]
+    public void Only_failures_that_pass_by_chance_are_retried(int status, string body, bool transient)
+    {
+        var text = body switch { "html" => NginxPage, "json" => """{"error":"Bad Request","message":"Invalid dataType"}""", _ => "" };
+        Assert.Equal(transient, UsdaClient.IsTransient(status, text));
+    }
+
+    [Fact]
+    public async Task A_search_USDA_fails_by_chance_is_asked_again()
+    {
+        _app.TransientFailures = 2;
+        var result = JsonDocument.Parse(await CalTrackTools.SearchUsda(Usda(), "ice cream sandwich")).RootElement;
+
+        Assert.True(result.GetProperty("count").GetInt32() > 0);
+        var asked = Searches();
+        Assert.Equal(3, asked.Count);
+        Assert.Single(asked.Distinct()); // the same request each time
+    }
+
+    [Fact]
+    public async Task After_two_retries_USDAs_answer_is_reported()
+    {
+        _app.TransientFailures = 10;
+        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(), "ice cream sandwich"));
+
+        Assert.StartsWith("USDA API error (HTTP 400): USDA's web server answered with an error page", ex.Message);
+        Assert.Equal(3, Searches().Count);
+    }
+
+    [Theory]
+    [InlineData(400, """{"error":"Bad Request","message":"Invalid dataType"}""", "Invalid dataType")]
+    [InlineData(429, "", "Rate limit")]
+    public async Task A_real_refusal_or_the_rate_limit_is_asked_once(int status, string body, string error)
+    {
+        _app.Reply = (status, body);
+        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(), "ice cream sandwich"));
+
+        Assert.Contains(error, ex.Message);
+        Assert.Single(Searches());
+    }
+
+    [Theory]
+    [InlineData(5.0)] // the wait alone runs past the deadline
+    [InlineData(0.8)] // the wait fits, but would leave the app under a second to answer
+    public async Task A_retry_without_time_to_be_answered_isnt_started(double delaySeconds)
+    {
+        _app.TransientFailures = 10;
+        var delay = TimeSpan.FromSeconds(delaySeconds);
+        string file;
+        McpException ex;
+        using (var trace = ProtocolTrace.Start(_dir))
+        {
+            ex = await Assert.ThrowsAsync<McpException>(() =>
+                CalTrackTools.SearchUsda(Usda(timeoutSeconds: 1.5, retryDelays: new[] { delay, delay }, trace: trace), "ice cream sandwich"));
+            file = trace.FilePath;
+        }
+
+        Assert.Contains("error page", ex.Message);
+        var attempts = File.ReadAllLines(file).Select(l => l.Split(' ', 3)).Where(p => p[1] == ProtocolTrace.UsdaLookup).ToList();
+        var only = JsonDocument.Parse(Assert.Single(attempts)[2]).RootElement; // no retry was asked
+        Assert.Equal("failed", only.GetProperty("outcome").GetString());
+        Assert.Single(Searches());
+    }
+
+    [Fact]
+    public async Task A_retry_left_unanswered_ends_with_USDAs_answer_not_a_timeout()
+    {
+        _app.TransientFailures = 1;
+        _app.StopAfter = 1; // CalTrack answers once, then stops answering (closed, say)
+        var ex = await Assert.ThrowsAsync<McpException>(() =>
+            CalTrackTools.SearchUsda(Usda(timeoutSeconds: 2), "ice cream sandwich"));
+
+        Assert.Contains("error page", ex.Message);
+        Assert.DoesNotContain("didn't answer", ex.Message);
+        Assert.Empty(Directory.GetFiles(Path.Combine(_dir, AppRequests.RequestsDir))); // the retry was withdrawn
+    }
+
+    [Fact]
+    public async Task Each_attempt_is_a_line_in_the_protocol_trace()
+    {
+        _app.TransientFailures = 1;
+        _app.FetchMs = 42;
+        string file;
+        using (var trace = ProtocolTrace.Start(_dir))
+        {
+            await CalTrackTools.SearchUsda(Usda(trace: trace), "ice cream sandwich", maxResults: 1);
+            file = trace.FilePath;
+        }
+
+        var usda = File.ReadAllLines(file).Select(l => l.Split(' ', 3)).Where(p => p[1] == ProtocolTrace.UsdaLookup)
+            .Select(p => JsonDocument.Parse(p[2]).RootElement).ToList();
+        var search = usda.Where(u => u.GetProperty("path").GetString()!.StartsWith("foods/search?")).ToList();
+        Assert.Equal(2, search.Count);
+
+        var first = search[0];
+        Assert.Equal(1, first.GetProperty("attempt").GetInt32());
+        Assert.Equal("retry", first.GetProperty("outcome").GetString());
+        Assert.Equal(400, first.GetProperty("status").GetInt32());
+        Assert.StartsWith("USDA's web server answered with an error page (\"400 Bad Request\")", first.GetProperty("reason").GetString());
+        Assert.Equal(NginxPage.Length, first.GetProperty("length").GetInt32());
+        Assert.Equal(42, first.GetProperty("fetchMs").GetInt32());
+        Assert.Equal(32, first.GetProperty("id").GetString()!.Length);
+
+        var second = search[1];
+        Assert.Equal(2, second.GetProperty("attempt").GetInt32());
+        Assert.Equal("ok", second.GetProperty("outcome").GetString());
+        Assert.Equal(200, second.GetProperty("status").GetInt32());
+        Assert.Equal(JsonValueKind.Null, second.GetProperty("reason").ValueKind);
+        Assert.Equal(first.GetProperty("path").GetString(), second.GetProperty("path").GetString());
+        Assert.NotEqual(first.GetProperty("id").GetString(), second.GetProperty("id").GetString());
+
+        // The portion lookup that followed is there too.
+        Assert.Contains(usda, u => u.GetProperty("path").GetString() == UsdaClient.FoodPath(172226));
+    }
+
+    [Fact]
+    public async Task Without_the_trace_nothing_is_written()
+    {
+        _app.TransientFailures = 1;
+        await CalTrackTools.SearchUsda(Usda(), "ice cream sandwich");
+        Assert.False(Directory.Exists(Path.Combine(_dir, ProtocolTrace.FolderName)));
+    }
+
+    [Fact]
+    public async Task The_apps_own_lookups_retry_the_same_way()
+    {
+        var search = File.ReadAllText(Path.Combine(Fixtures, "usda-search-ice-cream-sandwich.json"));
+        var usda = new ScriptedUsda((400, NginxPage), (200, search));
+        var (results, error) = await UsdaClient.SearchAsync(new HttpClient(usda), "key", "ice cream sandwich", 5, retryDelays: NoWait);
+        Assert.Null(error);
+        Assert.NotEmpty(results!);
+        Assert.Equal(2, usda.Calls);
+
+        var refused = new ScriptedUsda((400, """{"error":"Bad Request","message":"Invalid dataType"}"""), (200, search));
+        (_, error) = await UsdaClient.SearchAsync(new HttpClient(refused), "key", "ice cream sandwich", 5, retryDelays: NoWait);
+        Assert.Equal("USDA API error (HTTP 400): Invalid dataType", error);
+        Assert.Equal(1, refused.Calls);
+
+        var stuck = new ScriptedUsda((502, ""), (502, ""), (502, ""), (200, search));
+        (_, error) = await UsdaClient.SearchAsync(new HttpClient(stuck), "key", "ice cream sandwich", 5, retryDelays: NoWait);
+        Assert.Equal("USDA API error (HTTP 502). This happens now and then; try again in a moment.", error);
+        Assert.Equal(3, stuck.Calls);
+    }
+
+    /// <summary>USDA replying with each of <paramref name="replies"/> in turn (the last one repeats).</summary>
+    private sealed class ScriptedUsda(params (int Status, string Body)[] replies) : HttpMessageHandler
+    {
+        public int Calls;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var (status, body) = replies[Math.Min(Calls++, replies.Length - 1)];
+            return Task.FromResult(new HttpResponseMessage((System.Net.HttpStatusCode)status) { Content = new StringContent(body) });
+        }
     }
 
     [Fact]
@@ -591,7 +772,9 @@ public sealed class UsdaMenuTests : IDisposable
     /// Stands in for the CalTrack app's side of the request channel (request-worker.js):
     /// watches requests/, "fetches" from the captured USDA replies, writes responses/ and
     /// removes the request. Error and FoodStatus simulate an app without a key and USDA
-    /// failing; Paths records what was asked for.
+    /// failing; TransientFailures answers that many requests with USDA's chance error page
+    /// first, Reply answers every one the same, and StopAfter stops answering after that
+    /// many. Paths records what was asked for.
     /// </summary>
     internal sealed class FakeApp : IDisposable
     {
@@ -600,6 +783,10 @@ public sealed class UsdaMenuTests : IDisposable
         public int Answered;
         public string? Error;
         public int? FoodStatus;
+        public int TransientFailures;
+        public (int Status, string Body)? Reply;
+        public int? StopAfter;
+        public int? FetchMs;
         public readonly List<string> Paths = new();
 
         public FakeApp(string root)
@@ -613,6 +800,7 @@ public sealed class UsdaMenuTests : IDisposable
                     if (Directory.Exists(requests))
                         foreach (var path in Directory.GetFiles(requests, "*.json"))
                         {
+                            if (Answered >= StopAfter) break; // stopped answering: requests stay put
                             if (ReadLive(File.ReadAllText(path)) is { } request)
                             {
                                 Directory.CreateDirectory(responses);
@@ -644,9 +832,16 @@ public sealed class UsdaMenuTests : IDisposable
         {
             var path = r.Path ?? "";
             lock (Paths) Paths.Add(path);
-            var response = new AppResponse { Id = r.Id, Error = Error };
+            var response = new AppResponse { Id = r.Id, Error = Error, FetchMs = FetchMs };
             if (Error is not null) return response;
-            if (path.StartsWith("foods/search?"))
+            if (TransientFailures > 0)
+            {
+                TransientFailures--;
+                (response.Status, response.Body) = (400, NginxPage);
+            }
+            else if (Reply is { } reply)
+                (response.Status, response.Body) = reply;
+            else if (path.StartsWith("foods/search?"))
             {
                 // Real USDA replies: a Reuben search, generic (FNDDS) or branded, else the ice cream sandwich one.
                 var fixture = !path.Contains("query=reuben") ? "usda-search-ice-cream-sandwich.json"

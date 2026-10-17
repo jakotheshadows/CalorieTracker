@@ -18,12 +18,8 @@ var store = new DataFolderStore(dataDir);
 builder.Services.AddSingleton(store);
 builder.Services.AddSingleton(TimeProvider.System);
 
-// USDA lookups are asked of the CalTrack app through the data folder; the app holds the
-// user's USDA key, so the server has none.
-builder.Services.AddSingleton(sp => new UsdaGateway(sp.GetRequiredService<DataFolderStore>()));
-
-// Opt-in: record every protocol message in the data folder's mcp-trace/ (Claude Desktop's
-// "Record protocol traffic" setting passes --trace-protocol true).
+// Opt-in: record every protocol message, and each USDA lookup made for it, in the data
+// folder's mcp-trace/ (Claude Desktop's "Record protocol traffic" setting passes --trace-protocol true).
 ProtocolTrace? trace = null;
 Exception? traceFailure = null;
 if (ProtocolTrace.IsOn(ArgValue(args, "--trace-protocol") ?? Environment.GetEnvironmentVariable("CALTRACK_TRACE_PROTOCOL"))
@@ -32,6 +28,10 @@ if (ProtocolTrace.IsOn(ArgValue(args, "--trace-protocol") ?? Environment.GetEnvi
     try { trace = ProtocolTrace.Start(dataDir); }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { traceFailure = ex; }
 }
+
+// USDA lookups are asked of the CalTrack app through the data folder; the app holds the
+// user's USDA key, so the server has none.
+builder.Services.AddSingleton(new UsdaGateway(store, trace: trace));
 
 var mcp = builder.Services.AddMcpServer(ServerSetup.Configure);
 if (trace is null)

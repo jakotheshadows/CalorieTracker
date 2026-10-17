@@ -66,8 +66,9 @@ function expired(req) {
     return !(created > 0) || Date.now() - created > timeout;
 }
 
-// AppResponse: { Id, Error, Status, Body } — Error when the app couldn't ask, else USDA's
-// status (0 = unreachable) and reply verbatim.
+// AppResponse: { Id, Error, Status, Body, FetchMs } — Error when the app couldn't ask, else
+// USDA's status (0 = unreachable), reply verbatim, and how long the fetch took. Retrying is
+// the server's decision (UsdaClient.IsTransient), not the worker's.
 async function answer(req) {
     if (req.Kind !== "usda_get")
         return { Error: `This version of CalTrack doesn't understand "${req.Kind}" requests.` };
@@ -75,11 +76,13 @@ async function answer(req) {
     if (!ALLOWED.test(path) || /api_key/i.test(path))
         return { Error: "CalTrack only fetches USDA food searches and food records." };
     if (!key) return { Error: "No API key configured. Add one in Settings." };
+    const started = performance.now();
     try {
         const resp = await fetch(API + path + (path.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(key));
-        return { Status: resp.status, Body: await resp.text() };
+        const body = await resp.text();
+        return { Status: resp.status, Body: body, FetchMs: Math.round(performance.now() - started) };
     } catch {
-        return { Status: 0, Body: null };
+        return { Status: 0, Body: null, FetchMs: Math.round(performance.now() - started) };
     }
 }
 
