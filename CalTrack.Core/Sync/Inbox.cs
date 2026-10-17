@@ -70,6 +70,19 @@ public static class Inbox
     public static bool AppUnderstands(AppData main, string kind) =>
         OriginalKinds.Contains(kind) || main.InboxKinds.Contains(kind);
 
+    /// <summary>Recipe ingredients measured in servings of a menu item (<see cref="Units.Serving"/>).</summary>
+    public const string ServingUnits = "serving_units";
+
+    /// <summary>
+    /// Newer contents of ops this build applies. An older app would accept the op but misread
+    /// the new part (a "serving" ingredient would count no calories), so writers check
+    /// <see cref="AppHas"/> first. The app advertises it in <see cref="AppData.InboxFeatures"/>.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedFeatures = new[] { ServingUnits };
+
+    /// <summary>Does the app that saved <paramref name="main"/> understand <paramref name="feature"/>?</summary>
+    public static bool AppHas(AppData main, string feature) => main.InboxFeatures.Contains(feature);
+
     /// <summary>Lexically sortable, chronological, collision-free op file name.</summary>
     public static string FileNameFor(InboxOp op) =>
         $"{op.CreatedUtc:yyyyMMdd'T'HHmmssfff}-{op.Id}.json";

@@ -125,9 +125,12 @@ public sealed class DataFolderStore(string? root)
         var path = Path.Combine(RequireRoot(), AppRequests.ResponsesDir, AppRequests.FileNameFor(id));
         var text = ReadShared(path);
         if (text is null || AppRequests.TryParseResponse(text) is not { } response) return null;
-        try { File.Delete(path); } catch (IOException) { /* app still closing it; orphan cleanup gets it */ }
+        try { File.Delete(path); } catch (IOException) { _undeleted[path] = 0; /* app still closing it: the next sweep retries */ }
         return response;
     }
+
+    // Answers already taken whose file couldn't be deleted yet.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _undeleted = new();
 
     /// <summary>Withdraw an unanswered request, so the app doesn't answer into the void later.</summary>
     public void WithdrawRequest(string id)
@@ -139,6 +142,10 @@ public sealed class DataFolderStore(string? root)
     /// <summary>Remove answers nobody collected (their asker timed out) once they're old.</summary>
     public void SweepOrphanResponses(TimeSpan olderThan)
     {
+        foreach (var taken in _undeleted.Keys)
+            try { File.Delete(taken); _undeleted.TryRemove(taken, out _); }
+            catch (IOException) { /* still in use: next sweep */ }
+
         var dir = Path.Combine(RequireRoot(), AppRequests.ResponsesDir);
         if (!Directory.Exists(dir)) return;
         foreach (var path in Directory.EnumerateFiles(dir))

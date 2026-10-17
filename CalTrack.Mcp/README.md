@@ -73,10 +73,10 @@ folder, and barcode scanning.
 | | `add_menu_item` | Add a food — by USDA id (the server fetches the numbers, at the label serving or USDA's household portion), or with numbers the user gave. |
 | | `update_menu_item` | Rename or edit an item; only the fields passed change. |
 | | `delete_menu_item` | Delete an item; logged days keep its numbers as one-offs. |
-| | `add_recipe` | Add a recipe of ingredients, each a USDA id (numbers fetched by the server) or numbers the user gave. |
+| | `add_recipe` | Add a recipe of ingredients: a USDA id with a household portion and count (numbers fetched by the server), a food already on the menu in servings, or numbers the user gave. |
 | | `update_recipe` | Rename a recipe, change its servings, or remove, re-amount and add ingredients. |
 | | `delete_recipe` | Delete a recipe; logged days keep its numbers. The result has its ingredients, to add it back. |
-| | `search_usda` | Search USDA FoodData Central (via the open CalTrack app). |
+| | `search_usda` | Search USDA FoodData Central (via the open CalTrack app): generic foods first, including FNDDS's mixed dishes, each with its household portions; `branded` narrows to products or to generic foods. |
 | Log | `get_day` | One day's numbered entries and totals, including changes queued but not yet applied. |
 | | `get_summary` | Totals, per-day numbers and averages over a range of days. |
 | | `log_food` | Log servings of a **menu** item. Unknown names fail with the closest real names. |
@@ -95,6 +95,28 @@ Edits, deletes and plans are annotated `destructiveHint`, so clients ask before 
 Dates are `yyyy-MM-dd`, `today` or `yesterday`, in the user's local time zone.
 
 ## Design notes
+
+**Instructions the model always has.** The server sends instructions at connection: how to log
+something (menu, then one USDA food, then a recipe), to use household portions and say what it
+assumed rather than stop to ask, never to estimate numbers itself, and to prefer generic foods.
+Clients that load tools on demand show the model only tool names until it picks some, so a rule
+that lives only in `add_recipe`'s description is never read. In testing, 18 of 20 fresh sessions
+asked for numbers instead of building a recipe. The tools a model loads first
+(`list_menu_items`, `search_usda`, `log_adhoc`, `add_menu_item`) also point to `add_recipe`.
+
+**Generic first, with portions.** USDA ranks branded products among, often above, its generic
+foods, and the model took whatever came first. `search_usda` lists generic foods first, and it
+searches FNDDS, USDA's "as eaten" database, which has whole dishes like a Reuben sandwich. Each
+generic result lists its household portions, so the model can pick "1 slice" × 2 instead of
+guessing grams. FNDDS hits carry them; for the first few others the server fetches the full
+record and keeps it for the add that follows.
+
+**Change tools compatibly; version only what breaks.** Clients save a tool's definition the
+first time they use it, and Claude Code keeps that copy until the conversation is compacted. A
+changed description or a new optional parameter is safe: an old copy still makes valid calls. A
+renamed or removed tool, parameter or required field is not. If one ever has to break, add it
+under a new name (`add_recipe_v2`) and keep the old one working until clients have moved on;
+renaming every tool on every release would throw that saved copy away each time.
 
 **The app is the only writer of the data file.** The obvious design — app and server both
 rewrite `caltrack-data.json` — loses data: if the server writes between the app's read and its
@@ -134,7 +156,9 @@ so no lookup logic lives in JavaScript.
 **Old app versions can't lose new ops.** The app records the op kinds it understands in the
 data file; the server won't queue a newer kind (like `add_item`) until the app says it can
 apply it, and an app that meets an unknown kind leaves it in the inbox for a newer version
-instead of consuming it.
+instead of consuming it. Newer *contents* of a known op get the same treatment: a recipe
+ingredient measured in servings of a menu item waits for an app that lists `serving_units` in
+`InboxFeatures`, because an older one would apply the recipe but count that ingredient as zero.
 
 **Edits are patches, tried before they're sent.** An edit carries only what changes, never a whole
 item, so a change the user makes in the app before the edit arrives isn't overwritten. The server

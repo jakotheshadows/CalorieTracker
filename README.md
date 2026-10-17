@@ -98,6 +98,9 @@ Start a new chat in Claude Desktop and try:
 - *"I had a large egg for breakfast."*
 - *"Add an ice cream sandwich."* — a food that isn't on your menu yet: Claude searches USDA,
   adds it to your menu with USDA's numbers, and logs it.
+- *"Log a chili cheese dog."* — a dish USDA has no single entry for: Claude builds it as a recipe
+  from USDA ingredients (or foods already on your menu, like your own chili), logs it, and tells
+  you the amounts it assumed so you can correct them.
 - *"What have I eaten today?"*
 - *"Actually make that two eggs, and take the cookie off."*
 - *"How did I do this week?"*
@@ -139,8 +142,10 @@ A few things stay in CalTrack:
 - Barcode scanning.
 
 Claude can only log foods by their exact menu name. Foods and recipe ingredients it adds from USDA
-get USDA's numbers directly. Everything else uses numbers you give it; Claude is instructed never
-to estimate them.
+get USDA's numbers directly, and recipe ingredients from your menu use your saved numbers.
+Everything else uses numbers you give it; Claude is instructed never to estimate them. When you
+don't say how much, it uses USDA's household portions (1 slice, 1 cup, 1 large egg) and says so.
+It prefers USDA's generic foods unless you name a brand, store or restaurant.
 
 ---
 

@@ -33,13 +33,13 @@ if (ProtocolTrace.IsOn(ArgValue(args, "--trace-protocol") ?? Environment.GetEnvi
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { traceFailure = ex; }
 }
 
-var mcp = builder.Services
-    .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = ServerStatus.CurrentVersion });
+var mcp = builder.Services.AddMcpServer(ServerSetup.Configure);
 if (trace is null)
     mcp.WithStdioServerTransport();
 else
     mcp.WithStreamServerTransport(trace.Incoming(Console.OpenStandardInput()), trace.Outgoing(Console.OpenStandardOutput()));
 mcp.WithToolsFromAssembly();
+mcp.WithRequestFilters(ServerSetup.Filters);
 
 var app = builder.Build();
 var log = app.Services.GetRequiredService<ILogger<ProtocolTrace>>();

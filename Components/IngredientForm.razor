@@ -15,7 +15,8 @@
             <div class="input-pair">
                 <input class="input" type="number" step="any" min="0" @bind="Ingredient.Amount" />
                 <select class="input" @bind="Ingredient.Unit">
-                    @foreach (var unit in Units.Mass.Concat(Units.Volume))
+                    @* Servings of a menu item (added by Claude) don't convert to weight or volume. *@
+                    @foreach (var unit in Units.IsServing(Ingredient.Unit) ? Units.ForBase(Units.Serving) : Units.Mass.Concat(Units.Volume))
                     {
                         <option value="@unit">@unit</option>
                     }

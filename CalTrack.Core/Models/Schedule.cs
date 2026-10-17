@@ -48,6 +48,13 @@ public class AppData
     public List<string> InboxKinds { get; set; } = new();
 
     /// <summary>
+    /// What the app that last saved this data understands inside ops it already applies —
+    /// e.g. recipe ingredients measured in servings (CalorieTracker.Sync.Inbox.SupportedFeatures).
+    /// Same rule as <see cref="InboxKinds"/>: missing means "nothing new".
+    /// </summary>
+    public List<string> InboxFeatures { get; set; } = new();
+
+    /// <summary>
     /// The request kinds (see CalorieTracker.Sync.AppRequest) the app that last saved this
     /// data answers — e.g. USDA lookups made with the key only the app holds.
     /// </summary>

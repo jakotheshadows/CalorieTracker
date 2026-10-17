@@ -19,12 +19,17 @@ public sealed class UsdaGateway(DataFolderStore store, TimeSpan? timeout = null)
 
     private readonly TimeSpan _timeout = timeout ?? TimeSpan.FromSeconds(20);
 
-    // Search hits, so add_menu_item still has the numbers if the full lookup fails.
+    // Search hits: add_menu_item still has the numbers if the full lookup fails, and a full
+    // record that lost its label serving gets it back from here.
     private readonly ConcurrentDictionary<int, UsdaFood> _seen = new();
 
-    public async Task<List<UsdaFood>> SearchAsync(string query, int max)
+    // Full records already fetched this session (search_usda fetches some for their
+    // portions; adding the same food then costs no second lookup).
+    private readonly ConcurrentDictionary<int, UsdaFood> _full = new();
+
+    public async Task<List<UsdaFood>> SearchAsync(string query, int max, string dataTypes = UsdaClient.AllTypes)
     {
-        var reply = await FetchAsync(UsdaClient.SearchPath(query, max));
+        var reply = await FetchAsync(UsdaClient.SearchPath(query, max, dataTypes));
         var (foods, error) = UsdaClient.ReadSearch(reply.Status, reply.Body, KeyHint);
         if (foods is null) throw new McpException(error ?? "USDA search failed.");
         foreach (var f in foods.Where(f => f.FdcId > 0)) _seen[f.FdcId] = f;
@@ -37,17 +42,20 @@ public sealed class UsdaGateway(DataFolderStore store, TimeSpan? timeout = null)
     /// </summary>
     public async Task<(UsdaFood Food, string? Warning)> GetAsync(int fdcId)
     {
+        if (_full.TryGetValue(fdcId, out var cached)) return (cached, null);
         try
         {
             var reply = await FetchAsync(UsdaClient.FoodPath(fdcId));
             var (food, error) = UsdaClient.ReadFood(reply.Status, reply.Body, fdcId, KeyHint);
             if (food is null) throw new McpException(error ?? $"USDA has no food with id {fdcId}.");
-            _seen[fdcId] = food;
+            food = food.WithLabelServingFrom(_seen.GetValueOrDefault(fdcId));
+            _full[fdcId] = food;
             return (food, null);
         }
         catch (McpException ex) when (_seen.TryGetValue(fdcId, out var hit))
         {
-            return (hit, $"USDA's full record couldn't be fetched ({ex.Message}), so the search result was used — it has no household portions.");
+            return (hit, $"USDA's full record couldn't be fetched ({ex.Message}), so the search result was used" +
+                         (hit.Portions.Count > 0 ? "." : " — it has no household portions."));
         }
     }
 
@@ -62,7 +70,8 @@ public sealed class UsdaGateway(DataFolderStore store, TimeSpan? timeout = null)
                 "saved the data folder can't answer this server's requests. Ask the user to open CalTrack and update it " +
                 "(the \"Update now\" banner, or Settings → Check for updates), then try again.");
 
-        store.SweepOrphanResponses(TimeSpan.FromMinutes(10));
+        // Well past any asker's timeout, so another server's answer in flight is never swept.
+        store.SweepOrphanResponses(TimeSpan.FromMinutes(2));
         var request = new AppRequest
         {
             Id = Guid.NewGuid().ToString("N"),

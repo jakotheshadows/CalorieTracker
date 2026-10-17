@@ -261,6 +261,7 @@ public partial class AppState
         // Advertise what this build can apply, so outside writers never queue an op kind
         // the app would have to throw away (see Inbox.AppUnderstands).
         Data.InboxKinds = Inbox.SupportedKinds.ToList();
+        Data.InboxFeatures = Inbox.SupportedFeatures.ToList();
         Data.RequestKinds = AppRequests.SupportedKinds.ToList();
         var json = AppDataJson.Serialize(Data, indented: true);
         _lastSeen = await folder.WriteFileAsync(Inbox.MainFileName, json);
@@ -270,6 +271,7 @@ public partial class AppState
     /// <summary>True when the saved file doesn't yet advertise everything this build supports.</summary>
     private bool AdvertisesStaleKinds() =>
         !Data.InboxKinds.ToHashSet().SetEquals(Inbox.SupportedKinds) ||
+        !Data.InboxFeatures.ToHashSet().SetEquals(Inbox.SupportedFeatures) ||
         !Data.RequestKinds.ToHashSet().SetEquals(AppRequests.SupportedKinds);
 
     private async Task<string> SaveAsideAsync(string reason, string text)

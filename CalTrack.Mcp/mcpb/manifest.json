@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "caltrack",
   "display_name": "CalTrack",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Log food in CalTrack by telling Claude what you ate.",
   "long_description": "Connects Claude Desktop to your CalTrack data folder on this PC, so Claude can do what you do in CalTrack: log food, change or remove what you logged, add, edit and delete menu items and recipes (with nutrition from USDA FoodData Central), save and use day templates, log your weight, set your goals, and plan random days. Your data stays in the folder. USDA lookups are made by the CalTrack app with the key saved in its Settings, so CalTrack must be open for those.",
   "author": {
@@ -68,7 +68,7 @@
     },
     {
       "name": "search_usda",
-      "description": "Search USDA FoodData Central (through the open CalTrack app)."
+      "description": "Search USDA FoodData Central, generic foods first (through the open CalTrack app)."
     },
     {
       "name": "add_menu_item",
@@ -84,7 +84,7 @@
     },
     {
       "name": "add_recipe",
-      "description": "Add a recipe made of USDA ingredients or ones you give."
+      "description": "Add a recipe made of USDA ingredients, foods on your menu, or ones you give."
     },
     {
       "name": "update_recipe",

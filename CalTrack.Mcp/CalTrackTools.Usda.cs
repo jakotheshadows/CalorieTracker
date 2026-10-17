@@ -16,26 +16,55 @@ namespace CalTrack.Mcp;
 /// </summary>
 public static partial class CalTrackTools
 {
+    // Generic results whose household portions search_usda looks up (search hits other than
+    // FNDDS's leave them out): enough to choose amounts from, few enough to stay quick.
+    private const int PortionLookups = 3;
+    private const int MaxPortionsShown = 6;
+
     [McpServerTool(Name = "search_usda", ReadOnly = true, Idempotent = true, OpenWorld = true)]
     [Description(
-        "Search USDA FoodData Central for a food's nutrition. Use it when the user mentions a food that isn't " +
-        "on their menu, then add the best match with add_menu_item (by fdcId) so its numbers come from USDA. " +
-        "The search runs in the CalTrack app with the user's USDA key, so CalTrack must be open. " +
-        "Prefer a generic entry unless the user named a brand; if the right match isn't clear, show the user " +
-        "the options instead of picking.")]
+        "Search USDA FoodData Central for a food that isn't on the user's menu. Generic foods come first (USDA's " +
+        "standard data, including mixed dishes such as \"Reuben sandwich\"), then branded products; pass branded: true " +
+        "when the user named a brand, store or restaurant. If one result is the food itself, add it with add_menu_item " +
+        "(by fdcId). If it's a dish made of several foods and no single result is that dish, build it with add_recipe from " +
+        "generic ingredients. Generic results list USDA's household portions (e.g. \"1 slice (32 g)\") to choose amounts from. " +
+        "If several results could fit, use the closest generic one and tell the user which. The search runs in the " +
+        "CalTrack app with the user's USDA key, so CalTrack must be open.")]
     public static async Task<string> SearchUsda(
         UsdaGateway usda,
         [Description("What to look for, e.g. \"ice cream sandwich\" or a brand and product name.")] string query,
-        [Description("How many results to return, 1-15. Defaults to 8.")] int maxResults = 8)
+        [Description("How many results to return, 1-15. Defaults to 8.")] int maxResults = 8,
+        [Description("true: only branded products (the user named a brand, store or restaurant). false: only generic foods. Omit for generic first, then branded.")] bool? branded = null)
     {
         if (string.IsNullOrWhiteSpace(query)) throw new McpException("query is required.");
-        var results = await usda.SearchAsync(query.Trim(), Math.Clamp(maxResults, 1, 15));
+        var max = Math.Clamp(maxResults, 1, 15);
+        List<UsdaFood> results;
+        if (branded is { } onlyBranded)
+            results = (await usda.SearchAsync(query.Trim(), max, onlyBranded ? UsdaClient.BrandedTypes : UsdaClient.GenericTypes)).Take(max).ToList();
+        else
+        {
+            // USDA ranks branded products in among (often above) the generic foods; fetch a
+            // wider page and put generic first, each group in USDA's own order.
+            var page = await usda.SearchAsync(query.Trim(), Math.Min(50, max * 3));
+            results = page.Where(UsdaClient.IsGeneric).Concat(page.Where(f => !UsdaClient.IsGeneric(f))).Take(max).ToList();
+        }
+
+        // Household portions for the first few generic foods that came without them.
+        var portions = new Dictionary<int, List<UsdaPortion>>();
+        foreach (var f in results) portions.TryAdd(f.FdcId, f.Portions);
+        foreach (var food in results.Where(f => UsdaClient.IsGeneric(f) && f.Portions.Count == 0).Take(PortionLookups))
+        {
+            try { portions[food.FdcId] = (await usda.GetAsync(food.FdcId)).Food.Portions; }
+            catch (McpException) { /* listed without portions; add_menu_item/add_recipe report them */ }
+        }
+
         return Json(new
         {
             count = results.Count,
             results = results.Select(f =>
             {
                 var per = f.NutrientsFor(f.DefaultAmount);
+                var shown = UsdaClient.IsGeneric(f) ? portions.GetValueOrDefault(f.FdcId) : null;
                 return new
                 {
                     fdcId = f.FdcId,
@@ -47,20 +76,22 @@ public static partial class CalTrackTools
                     proteinG = per.TryGetValue("protein", out var p) ? p : (double?)null,
                     carbsG = per.TryGetValue("carbs", out var c) ? c : (double?)null,
                     fatG = per.TryGetValue("fat", out var fat) ? fat : (double?)null,
+                    portions = shown is { Count: > 0 } ? shown.Take(MaxPortionsShown).Select(PortionText).ToList() : null,
                 };
             }),
-            note = "Nutrition is per the listed serving: the package label for branded foods, 100 g for generic " +
-                   "ones. add_menu_item uses USDA's household portions for generic foods (e.g. \"1 sandwich\").",
+            note = "Nutrition is per the listed serving: the package label for branded foods, 100 g for generic ones. " +
+                   "Use a listed portion with add_menu_item (portion) or add_recipe (portion and count, e.g. \"1 slice\" × 2).",
         });
     }
 
     [McpServerTool(Name = "add_menu_item", Destructive = false, OpenWorld = true)]
     [Description(
-        "Add a food to the user's CalTrack menu so it can be logged with log_food. Preferred: pass usdaFdcId " +
-        "from search_usda — the server fetches the nutrition from USDA itself, using the package label serving " +
-        "for branded foods or USDA's household portion (e.g. \"1 sandwich\") for generic ones. Without usdaFdcId, " +
-        "calories are required and must come from the user (e.g. a label), never estimated. Fails if the name " +
-        "is already on the menu. The item can be logged with log_food immediately.")]
+        "Add one food to the user's CalTrack menu so it can be logged with log_food (for a dish made of several " +
+        "foods, use add_recipe). Preferred: pass usdaFdcId from search_usda — the server fetches the nutrition from " +
+        "USDA itself, using the package label serving for branded foods or USDA's household portion (e.g. \"1 sandwich\") " +
+        "for generic ones. For a branded product, put the brand in the name (e.g. \"Walgreens Reuben\"). Without " +
+        "usdaFdcId, calories are required and must come from the user (e.g. a label), never estimated. Fails if the " +
+        "name is already on the menu. The item can be logged with log_food immediately.")]
     public static async Task<string> AddMenuItem(
         DataFolderStore store,
         UsdaGateway usda,
@@ -91,6 +122,7 @@ public static partial class CalTrackTools
         object source;
         List<string>? otherPortions = null;
         string? warning = null;
+        var brandedProduct = false;
 
         if (usdaFdcId is { } fdcId)
         {
@@ -102,6 +134,11 @@ public static partial class CalTrackTools
                 throw new McpException($"USDA's record #{fdcId} has no calorie data, so it wasn't added. Pick another result.");
 
             var (amountInBase, servingText, chosen) = PickServing(food, portion, servingAmount, servingUnit);
+            brandedProduct = !UsdaClient.IsGeneric(food);
+            if (brandedProduct && food.LabelServingAmount is null && servingAmount is null && chosen is null)
+                warning = string.Join(" ", new[] { warning, $"USDA lists no package serving for this product, so one serving is 100 {food.BaseUnit}. " +
+                    "If the user ate a whole package, log the matching number of servings (e.g. 2.5 for 250 g) and say so." }
+                    .Where(w => w is not null));
             var itemName = string.IsNullOrWhiteSpace(name) ? food.Description : name.Trim();
             if (snap.View.ResolveItem(itemName) is { } clash2)
                 throw new McpException($"\"{clash2.Name}\" is already on the menu — log it with log_food.");
@@ -168,7 +205,8 @@ public static partial class CalTrackTools
             },
             otherPortions = otherPortions is { Count: > 0 } ? otherPortions : null,
             status,
-            note = $"Queued for the CalTrack app, which adds it to the menu within seconds when open. It can be logged right away: log_food with itemName \"{item.Name}\".",
+            note = $"Queued for the CalTrack app, which adds it to the menu within seconds when open. It can be logged right away: log_food with itemName \"{item.Name}\"." +
+                   (brandedProduct ? " These are a branded product's numbers: tell the user which product they're for." : ""),
             warning,
         });
     }

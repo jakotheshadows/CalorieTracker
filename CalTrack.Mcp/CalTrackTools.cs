@@ -40,7 +40,8 @@ public static partial class CalTrackTools
     [Description(
         "List the foods on the user's CalTrack menu (saved items and recipes) with per-serving nutrition. " +
         "These are the ONLY names log_food accepts. Call this before logging and match what the user said " +
-        "to these names; if nothing fits, look the food up with search_usda (then add_menu_item) or ask the user — never guess.")]
+        "to these names. If nothing fits, look the food up with search_usda, then add it with add_menu_item (one food) " +
+        "or add_recipe (a dish made of several foods) — never guess at numbers.")]
     public static string ListMenuItems(
         DataFolderStore store,
         [Description("Optional: only return items whose name contains this text (case-insensitive).")] string? search = null)
@@ -101,8 +102,9 @@ public static partial class CalTrackTools
             throw new McpException(
                 $"\"{name}\" is not on the user's menu, so nothing was logged. " +
                 (close.Count > 0 ? $"Closest menu names: {string.Join(", ", close.Select(c => $"\"{c}\""))}. " : "") +
-                "Use an exact name from list_menu_items, or ask the user. For a food that isn't on the menu, find it " +
-                "with search_usda and add it with add_menu_item, or use log_adhoc with nutrition the user gave.");
+                "Use an exact name from list_menu_items. For a food that isn't on the menu, find it with search_usda and " +
+                "add it with add_menu_item (one food) or add_recipe (a dish made of several foods), or use log_adhoc " +
+                "with nutrition the user gave.");
         }
 
         var op = new InboxOp
@@ -121,9 +123,10 @@ public static partial class CalTrackTools
 
     [McpServerTool(Name = "log_adhoc", Destructive = false)]
     [Description(
-        "Log a one-off food that is NOT on the menu, with its per-serving nutrition. Only use numbers the " +
-        "user stated or explicitly confirmed (e.g. from a label) — never invent or silently estimate them; " +
-        "if you'd have to guess, ask the user first. Fails for names that are on the menu (use log_food).")]
+        "Log a one-off food that is NOT on the menu, with nutrition the user gave you (e.g. from a label or a " +
+        "restaurant's menu). Never with numbers you estimated or added up yourself: for a dish made of several " +
+        "foods, use add_recipe, which fetches each ingredient's nutrition from USDA and adds it up. Fails for " +
+        "names that are on the menu (use log_food).")]
     public static string LogAdHoc(
         DataFolderStore store,
         TimeProvider clock,

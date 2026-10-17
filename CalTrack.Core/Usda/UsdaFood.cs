@@ -33,7 +33,7 @@ public class UsdaFood
     public double? CaloriesPer100 { get; init; }
     public Dictionary<string, double> NutrientsPer100 { get; init; } = new();
 
-    /// <summary>Household measures (only from the per-food endpoint; search results omit them).</summary>
+    /// <summary>Household measures: from the per-food endpoint, or a Survey (FNDDS) search hit (other hits omit them).</summary>
     public List<UsdaPortion> Portions { get; init; } = new();
 
     /// <summary>Amount used when a result is first applied: the label serving, else 100.</summary>
@@ -66,6 +66,32 @@ public class UsdaFood
         return unit == BaseUnit
             ? $"{amount.ToString("0.##", CultureInfo.InvariantCulture)} {unit}"
             : $"{amount.ToString("0.##", CultureInfo.InvariantCulture)} {unit} ({amountInBase.ToString("0.#", CultureInfo.InvariantCulture)} {BaseUnit})";
+    }
+
+    /// <summary>
+    /// This food with the label serving taken from <paramref name="searchHit"/> when its own
+    /// record has none. Some Branded full records (food/{id}) drop servingSize that the same
+    /// food's search hit carries — a 268 g sandwich would otherwise become a 100 g serving.
+    /// </summary>
+    public UsdaFood WithLabelServingFrom(UsdaFood? searchHit)
+    {
+        if (LabelServingAmount is not null || searchHit is not { LabelServingAmount: not null } hit
+            || hit.FdcId != FdcId || hit.BaseUnit != BaseUnit)
+            return this;
+        return new UsdaFood
+        {
+            FdcId = FdcId,
+            Description = Description,
+            Brand = Brand,
+            DataType = DataType,
+            BaseUnit = BaseUnit,
+            LabelServingAmount = hit.LabelServingAmount,
+            LabelServingText = LabelServingText ?? hit.LabelServingText,
+            GtinUpc = GtinUpc,
+            CaloriesPer100 = CaloriesPer100,
+            NutrientsPer100 = NutrientsPer100,
+            Portions = Portions,
+        };
     }
 
     /// <summary>A menu item for this food at one serving — what the app's item editor fills in.</summary>

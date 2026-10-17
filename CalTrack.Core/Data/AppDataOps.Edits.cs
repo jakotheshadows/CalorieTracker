@@ -135,9 +135,10 @@ public static partial class AppDataOps
             if (copy.Ingredients.FirstOrDefault(i => Same(i.Name, change.Name?.Trim())) is not { } ingredient)
                 return $"\"{recipe.Name}\" has no ingredient named \"{change.Name}\".";
             var unit = change.Unit?.Trim().ToLowerInvariant() ?? "";
-            if (Units.ToBase(change.Amount, unit) is null) return $"\"{change.Name}\": amount must be greater than 0 in g, kg, oz, lb, ml, l or fl oz (got {change.Amount} {change.Unit}).";
-            // Nutrition is stored per 100 g or ml; switching between mass and volume would misread it.
-            if (Units.BaseUnitFor(unit) != ingredient.BaseUnit) return $"\"{change.Name}\" is measured by {(ingredient.BaseUnit == "ml" ? "volume" : "weight")}; use {string.Join(", ", Units.ForBase(ingredient.BaseUnit))}.";
+            if (Units.ToBase(change.Amount, unit) is null) return $"\"{change.Name}\": amount must be greater than 0 in g, kg, oz, lb, ml, l, fl oz or serving (got {change.Amount} {change.Unit}).";
+            // Nutrition is stored per 100 g, ml or servings; switching between them would misread it.
+            if (Units.BaseUnitFor(unit) != ingredient.BaseUnit)
+                return $"\"{change.Name}\" is measured {ingredient.BaseUnit switch { "ml" => "by volume", Units.Serving => "in servings", _ => "by weight" }}; use {string.Join(", ", Units.ForBase(ingredient.BaseUnit))}.";
             ingredient.Amount = change.Amount;
             ingredient.Unit = unit;
         }

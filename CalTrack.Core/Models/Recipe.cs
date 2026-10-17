@@ -22,7 +22,9 @@ public class RecipeIngredient
     public double? Nutrient(string key) =>
         NutrientsPer100.TryGetValue(key, out var per100) && AmountInBase is { } b ? per100 * b / 100.0 : null;
 
-    public string AmountDisplay => $"{Amount:0.##} {Unit}";
+    public string AmountDisplay => Units.IsServing(Unit)
+        ? $"{Amount:0.##} serving{(Amount == 1 ? "" : "s")}"
+        : $"{Amount:0.##} {Unit}";
 
     public RecipeIngredient Clone() => new()
     {

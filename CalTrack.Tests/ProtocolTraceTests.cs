@@ -84,9 +84,10 @@ public sealed class ProtocolTraceTests : IDisposable
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton(new UsdaGateway(store));
         builder.Services
-            .AddMcpServer(o => o.ServerInfo = new() { Name = "caltrack", Version = ServerStatus.CurrentVersion })
+            .AddMcpServer(ServerSetup.Configure)
             .WithStreamServerTransport(trace.Incoming(serverIn), trace.Outgoing(serverOut))
-            .WithToolsFromAssembly(typeof(CalTrackTools).Assembly);
+            .WithToolsFromAssembly(typeof(CalTrackTools).Assembly)
+            .WithRequestFilters(ServerSetup.Filters);
         using var host = builder.Build();
         await host.StartAsync();
 
@@ -97,6 +98,7 @@ public sealed class ProtocolTraceTests : IDisposable
             """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}""",
             """{"jsonrpc":"2.0","method":"notifications/initialized"}""",
             """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_menu_items","arguments":{"search":"egg"}}}""",
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"log_food","arguments":{"servings":1}}}""",
         };
         var received = new List<string>();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -105,14 +107,23 @@ public sealed class ProtocolTraceTests : IDisposable
         await send.WriteLineAsync(sent[1]);
         await send.WriteLineAsync(sent[2]);
         received.Add((await receive.ReadLineAsync(timeout.Token))!);
+        await send.WriteLineAsync(sent[3]);
+        received.Add((await receive.ReadLineAsync(timeout.Token))!);
         await host.StopAsync(timeout.Token);
 
-        Assert.Equal("2025-11-25", JsonDocument.Parse(received[0]).RootElement.GetProperty("result").GetProperty("protocolVersion").GetString());
+        var init = JsonDocument.Parse(received[0]).RootElement.GetProperty("result");
+        Assert.Equal("2025-11-25", init.GetProperty("protocolVersion").GetString());
+        // The workflow rules reach the model even before it loads a single tool.
+        Assert.Equal(ServerSetup.Instructions, init.GetProperty("instructions").GetString());
         Assert.Contains("Large egg", received[1]);
+        // A missing required argument is named, not hidden behind the SDK's generic error.
+        var missing = JsonDocument.Parse(received[2]).RootElement.GetProperty("result");
+        Assert.True(missing.GetProperty("isError").GetBoolean());
+        Assert.StartsWith("log_food needs itemName (Exact menu item", missing.GetProperty("content")[0].GetProperty("text").GetString());
 
         var lines = Lines(trace);
         Assert.Equal(
-            new[] { "C->S " + sent[0], "S->C " + received[0], "C->S " + sent[1], "C->S " + sent[2], "S->C " + received[1] },
+            new[] { "C->S " + sent[0], "S->C " + received[0], "C->S " + sent[1], "C->S " + sent[2], "S->C " + received[1], "C->S " + sent[3], "S->C " + received[2] },
             lines.Select(l => l[(l.IndexOf(' ') + 1)..]));
         Assert.All(lines, l => Assert.True(DateTime.TryParse(l[..l.IndexOf(' ')], out _), l));
     }

@@ -27,6 +27,7 @@ public sealed class UsdaMenuTests : IDisposable
         var data = InboxTests.Menu();
         // An up-to-date app saved this: it applies add_item and answers USDA requests.
         data.InboxKinds = Inbox.SupportedKinds.ToList();
+        data.InboxFeatures = Inbox.SupportedFeatures.ToList();
         data.RequestKinds = AppRequests.SupportedKinds.ToList();
         WriteMain(data);
         _app = new FakeApp(_dir);
@@ -244,8 +245,8 @@ public sealed class UsdaMenuTests : IDisposable
     public async Task If_the_full_record_fails_the_search_hit_is_used_with_a_warning()
     {
         var usda = Usda();
+        _app.FoodStatus = 500; // full records fail: search_usda lists the food without portions, add_menu_item falls back
         await CalTrackTools.SearchUsda(usda, "ice cream sandwich");
-        _app.FoodStatus = 500;
 
         var result = JsonDocument.Parse(await CalTrackTools.AddMenuItem(_store, usda, usdaFdcId: 172226, name: "Ice cream sandwich")).RootElement;
 
@@ -378,6 +379,179 @@ public sealed class UsdaMenuTests : IDisposable
         Assert.Equal(0, InboxCount());
     }
 
+    // ---------- 0.7.1: finding dishes, and building them without guesswork ----------
+
+    [Fact]
+    public void Searches_include_USDAs_mixed_dishes_and_can_be_narrowed()
+    {
+        Assert.Contains(Uri.EscapeDataString("Survey (FNDDS)"), UsdaClient.SearchPath("reuben", 5));
+        Assert.Contains(Uri.EscapeDataString("Branded"), UsdaClient.SearchPath("reuben", 5));
+        Assert.DoesNotContain("Branded", UsdaClient.SearchPath("reuben", 5, UsdaClient.GenericTypes));
+        Assert.All(new[] { UsdaClient.SearchPath("reuben", 5), UsdaClient.SearchPath("reuben", 5, UsdaClient.BrandedTypes) },
+            path => Assert.True(WorkerAllows(path), path)); // the app will fetch them
+    }
+
+    [Fact]
+    public void FNDDS_search_hits_carry_household_portions()
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(Fixtures, "usda-search-reuben-generic.json")));
+        var reuben = UsdaClient.ParseSearchFood(doc.RootElement.GetProperty("foods")[0]);
+
+        Assert.Equal("Survey (FNDDS)", reuben.DataType);
+        Assert.Equal("Reuben sandwich", reuben.Description);
+        Assert.Equal(new UsdaPortion("1 sandwich, any size", 215), Assert.Single(reuben.Portions)); // "Quantity not specified" skipped
+        Assert.True(UsdaClient.IsGeneric(reuben));
+    }
+
+    [Fact]
+    public async Task search_usda_lists_generic_foods_first_with_their_portions()
+    {
+        var result = JsonDocument.Parse(await CalTrackTools.SearchUsda(Usda(), "ice cream sandwich")).RootElement;
+        var types = result.GetProperty("results").EnumerateArray().Select(r => r.GetProperty("dataType").GetString()).ToList();
+
+        // USDA ranked a branded product second; generic foods now come first, then branded.
+        Assert.Equal(new[] { "SR Legacy", "SR Legacy", "SR Legacy", "SR Legacy", "Branded" }, types);
+        var first = result.GetProperty("results")[0];
+        Assert.Equal(172226, first.GetProperty("fdcId").GetInt32());
+        Assert.Equal("1 serving (70 g)", first.GetProperty("portions")[0].GetString()); // looked up from the full record
+        Assert.False(result.GetProperty("results")[4].TryGetProperty("portions", out _)); // branded: its label serving instead
+    }
+
+    [Fact]
+    public async Task branded_narrows_the_search_and_a_named_brand_gets_only_products()
+    {
+        await CalTrackTools.SearchUsda(Usda(), "reuben on rye", branded: true);
+        await CalTrackTools.SearchUsda(Usda(), "reuben", branded: false);
+
+        lock (_app.Paths)
+        {
+            Assert.EndsWith("dataType=Branded", _app.Paths.First(p => p.Contains("query=reuben%20on%20rye")));
+            Assert.EndsWith("dataType=" + Uri.EscapeDataString(UsdaClient.GenericTypes), _app.Paths.First(p => p.Contains("query=reuben&")));
+        }
+    }
+
+    [Fact]
+    public async Task A_branded_record_that_lost_its_serving_size_gets_it_back_from_the_search_hit()
+    {
+        // USDA's full record for this sandwich has no servingSize; its search hit says 268.2 g.
+        var usda = Usda();
+        await CalTrackTools.SearchUsda(usda, "reuben on rye", branded: true);
+
+        var result = JsonDocument.Parse(await CalTrackTools.AddMenuItem(_store, usda, usdaFdcId: 2105271, name: "Walgreens Reuben")).RootElement;
+
+        var added = result.GetProperty("added");
+        Assert.Equal("1 CONTAINER (268.2 g)", added.GetProperty("serving").GetString());
+        Assert.Equal(601, added.GetProperty("calories").GetDouble());
+        Assert.Contains("branded product", result.GetProperty("note").GetString());
+        Assert.False(result.TryGetProperty("warning", out _));
+    }
+
+    [Fact]
+    public async Task Without_a_search_hit_a_serving_less_branded_record_says_its_serving_is_100_g()
+    {
+        var result = JsonDocument.Parse(await CalTrackTools.AddMenuItem(_store, Usda(), usdaFdcId: 2105271, name: "Walgreens Reuben")).RootElement;
+
+        Assert.Equal("100 g", result.GetProperty("added").GetProperty("serving").GetString());
+        Assert.Contains("no package serving", result.GetProperty("warning").GetString());
+    }
+
+    [Fact]
+    public async Task A_recipe_ingredient_can_be_several_of_a_household_portion()
+    {
+        var result = JsonDocument.Parse(await CalTrackTools.AddRecipe(_store, Usda(), "Double sandwich",
+            [new RecipeIngredientInput { UsdaFdcId = 172226, Portion = "1 serving", Count = 2 }])).RootElement;
+
+        var ingredient = Assert.Single(result.GetProperty("ingredients").EnumerateArray());
+        Assert.Equal("2 × 1 serving (70 g) = 140 g", ingredient.GetProperty("amount").GetString());
+        Assert.Equal(332, result.GetProperty("added").GetProperty("perServing").GetProperty("calories").GetDouble()); // 237 kcal/100 g × 140 g
+
+        AppIngest();
+        var stored = Assert.Single(ReadMain().FindRecipe("Double sandwich")!.Ingredients);
+        Assert.Equal((140, "g"), (stored.Amount, stored.Unit));
+    }
+
+    [Fact]
+    public async Task A_food_on_the_menu_can_be_a_recipe_ingredient_measured_in_its_servings()
+    {
+        var result = JsonDocument.Parse(await CalTrackTools.AddRecipe(_store, Usda(), "Egg sandwich",
+        [
+            new RecipeIngredientInput { MenuItem = "large egg", Count = 2 },          // an item: 72 kcal a serving
+            new RecipeIngredientInput { MenuItem = "Overnight oats", Count = 0.5 },   // a recipe: 380 / 2 = 190 kcal a serving
+        ])).RootElement;
+
+        Assert.Equal(239, result.GetProperty("added").GetProperty("perServing").GetProperty("calories").GetDouble()); // 144 + 95
+        var report = result.GetProperty("ingredients").EnumerateArray().ToList();
+        Assert.Equal("2 servings of \"Large egg\"", report[0].GetProperty("amount").GetString());
+        Assert.Equal("the user's menu: Large egg", report[0].GetProperty("source").GetString());
+
+        // The app applies it with the same numbers, and shows the amount in servings.
+        AppIngest();
+        var recipe = ReadMain().FindRecipe("Egg sandwich")!;
+        Assert.Equal(new[] { "2 servings", "0.5 servings" }, recipe.Ingredients.Select(i => i.AmountDisplay));
+        Assert.Equal(12.6, recipe.Ingredients[0].Nutrient("protein")!.Value, 3);
+        Assert.Equal(239, recipe.ToMenuItem().Calories);
+    }
+
+    [Fact]
+    public async Task Menu_item_ingredients_are_checked_and_wait_for_an_app_that_understands_servings()
+    {
+        async Task<string> Refusal(params RecipeIngredientInput[] ingredients) =>
+            (await Assert.ThrowsAsync<McpException>(() => CalTrackTools.AddRecipe(_store, Usda(), "New dish", ingredients.ToList()))).Message;
+
+        Assert.Contains("Closest menu names", await Refusal(new RecipeIngredientInput { MenuItem = "Large eggs" }));
+        Assert.Contains("only count", await Refusal(new RecipeIngredientInput { MenuItem = "Large egg", Amount = 50, Unit = "g" }));
+        Assert.Contains("not both", await Refusal(new RecipeIngredientInput { MenuItem = "Large egg", UsdaFdcId = 172226 }));
+        Assert.Contains("not both", await Refusal(new RecipeIngredientInput { UsdaFdcId = 172226, Count = 2, Amount = 140 }));
+        Assert.Contains("count must be", await Refusal(new RecipeIngredientInput { MenuItem = "Large egg", Count = 0 }));
+
+        var data = ReadMain();
+        data.InboxFeatures = new(); // an app from before serving units: it would count no calories for them
+        WriteMain(data);
+        Assert.Contains("update it", await Refusal(new RecipeIngredientInput { MenuItem = "Large egg" }));
+        Assert.Equal(0, InboxCount());
+    }
+
+    [Fact]
+    public async Task A_recipe_cannot_contain_itself()
+    {
+        var clock = new FixedClock(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.FromHours(-4)));
+        var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.UpdateRecipe(_store, Usda(), clock, "Overnight oats",
+            addIngredients: [new RecipeIngredientInput { MenuItem = "overnight oats" }]));
+        Assert.Contains("can't contain itself", ex.Message);
+    }
+
+    [Fact]
+    public void Serving_ingredients_scale_but_never_turn_into_weight()
+    {
+        var chili = new RecipeIngredient { Name = "Chili", Amount = 1.5, Unit = Units.Serving, CaloriesPer100 = 71600 };
+        Assert.Equal(1074, chili.Calories);
+        Assert.Equal("1.5 servings", chili.AmountDisplay);
+        Assert.Equal(Units.Serving, chili.BaseUnit);
+
+        var data = InboxTests.Menu();
+        data.Recipes.Add(new Recipe { Name = "Chili dog", Ingredients = { chili } });
+        Assert.Null(data.UpdateRecipe("Chili dog", new RecipePatch { IngredientAmounts = [new IngredientAmount { Name = "Chili", Amount = 1, Unit = "serving" }] }));
+        Assert.Equal(716, data.FindRecipe("Chili dog")!.ToMenuItem().Calories);
+        Assert.Contains("measured in servings", data.UpdateRecipe("Chili dog",
+            new RecipePatch { IngredientAmounts = [new IngredientAmount { Name = "Chili", Amount = 100, Unit = "g" }] }));
+    }
+
+    [Fact]
+    public void The_tools_a_model_loads_first_all_point_to_add_recipe_for_dishes()
+    {
+        // With tools loaded on demand, the model only reads the descriptions of the tools it picked:
+        // in testing, these four. Each must lead to add_recipe for a dish no single food matches.
+        foreach (var tool in new[] { "list_menu_items", "search_usda", "log_adhoc", "add_menu_item" })
+        {
+            var method = typeof(CalTrackTools).GetMethods().Single(m =>
+                m.GetCustomAttributes(typeof(ModelContextProtocol.Server.McpServerToolAttribute), false)
+                 .Cast<ModelContextProtocol.Server.McpServerToolAttribute>().Any(a => a.Name == tool));
+            var description = ((System.ComponentModel.DescriptionAttribute)method.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), false).Single()).Description;
+            Assert.Contains("add_recipe", description);
+        }
+        Assert.Contains("add_recipe", ServerSetup.Instructions);
+    }
+
     private static InboxOp RecipeOp(string name, double servings, params RecipeIngredient[] ingredients) => new()
     {
         Id = Guid.NewGuid().ToString("N"),
@@ -466,11 +640,19 @@ public sealed class UsdaMenuTests : IDisposable
             var response = new AppResponse { Id = r.Id, Error = Error };
             if (Error is not null) return response;
             if (path.StartsWith("foods/search?"))
-                (response.Status, response.Body) = (200, File.ReadAllText(Path.Combine(Fixtures, "usda-search-ice-cream-sandwich.json")));
+            {
+                // Real USDA replies: a Reuben search, generic (FNDDS) or branded, else the ice cream sandwich one.
+                var fixture = !path.Contains("query=reuben") ? "usda-search-ice-cream-sandwich.json"
+                    : path.EndsWith("dataType=" + UsdaClient.BrandedTypes) ? "usda-search-reuben-branded.json"
+                    : "usda-search-reuben-generic.json";
+                (response.Status, response.Body) = (200, File.ReadAllText(Path.Combine(Fixtures, fixture)));
+            }
             else if (FoodStatus is { } status)
                 (response.Status, response.Body) = (status, "");
             else if (path == UsdaClient.FoodPath(172226))
                 (response.Status, response.Body) = (200, File.ReadAllText(Path.Combine(Fixtures, "usda-food-172226.json")));
+            else if (path == UsdaClient.FoodPath(2105271)) // a Branded full record that lost its servingSize
+                (response.Status, response.Body) = (200, File.ReadAllText(Path.Combine(Fixtures, "usda-food-2105271.json")));
             else
                 (response.Status, response.Body) = (404, "");
             return response;

@@ -37,12 +37,26 @@ public static class UsdaClient
     // The app fetches these for the MCP server and refuses any other shape, so keep them in
     // step with ALLOWED in wwwroot/js/request-worker.js.
 
-    /// <summary>A text search over the generic and branded data types.</summary>
-    public static string SearchPath(string query, int pageSize) =>
+    /// <summary>
+    /// USDA's generic data types. Survey (FNDDS) is the "as eaten" database: mixed dishes like
+    /// a Reuben sandwich or a banana split, with household portions even in search results.
+    /// </summary>
+    public const string GenericTypes = "Foundation,SR Legacy,Survey (FNDDS)";
+
+    /// <summary>Packaged and restaurant products, with their label serving.</summary>
+    public const string BrandedTypes = "Branded";
+
+    public const string AllTypes = BrandedTypes + "," + GenericTypes;
+
+    /// <summary>A text search over <paramref name="dataTypes"/> (default: generic and branded).</summary>
+    public static string SearchPath(string query, int pageSize, string dataTypes = AllTypes) =>
         "foods/search" +
         $"?query={Uri.EscapeDataString(query.Trim())}" +
         $"&pageSize={pageSize}" +
-        "&dataType=" + Uri.EscapeDataString("Branded,Foundation,SR Legacy");
+        "&dataType=" + Uri.EscapeDataString(dataTypes);
+
+    /// <summary>True for USDA's generic data types (everything but Branded).</summary>
+    public static bool IsGeneric(UsdaFood food) => food.DataType != BrandedTypes;
 
     /// <summary>
     /// One food by id, from the per-food endpoint — the only one that carries household
@@ -196,9 +210,12 @@ public static class UsdaClient
         }
     }
 
-    /// <summary>A search hit: nutrients per 100 g (or 100 ml), flat {nutrientNumber, value} rows.</summary>
+    /// <summary>
+    /// A search hit: nutrients per 100 g (or 100 ml), flat {nutrientNumber, value} rows. Survey
+    /// (FNDDS) hits also carry household measures; other data types' come only from the per-food endpoint.
+    /// </summary>
     public static UsdaFood ParseSearchFood(JsonElement food) =>
-        Build(food, EnumerateRows(food, "nutrientNumber", "value", nested: false), new List<UsdaPortion>());
+        Build(food, EnumerateRows(food, "nutrientNumber", "value", nested: false), ParseSearchMeasures(food));
 
     /// <summary>The per-food endpoint: nested {nutrient:{number}, amount} rows, plus portions.</summary>
     public static UsdaFood ParseDetailFood(JsonElement food) =>
@@ -221,18 +238,23 @@ public static class UsdaClient
     private static UsdaFood Build(JsonElement food, IEnumerable<(string Number, double Value)> rows, List<UsdaPortion> portions)
     {
         // Branded items carry their label serving; other data types report per 100 g only.
+        // Some Branded full records drop the serving size but keep its unit, so the unit alone
+        // still says whether the food is measured in g or ml (UsdaFood.WithLabelServingFrom
+        // fills the size back in from the search hit).
         var baseUnit = "g";
         double? labelAmount = null;
         string? labelText = null;
-        if (food.TryGetProperty("servingSize", out var ss) && ss.TryGetDouble(out var size) && size > 0 &&
-            food.TryGetProperty("servingSizeUnit", out var ssu))
+        if (food.TryGetProperty("servingSizeUnit", out var ssu) && ssu.ValueKind == JsonValueKind.String)
         {
             var unit = (ssu.GetString() ?? "").ToLowerInvariant();
             if (unit is "g" or "grm" or "ml" or "mlt")
             {
                 baseUnit = unit.StartsWith('m') ? "ml" : "g";
-                labelAmount = size;
-                labelText = food.TryGetProperty("householdServingFullText", out var h) ? h.GetString() : null;
+                if (food.TryGetProperty("servingSize", out var ss) && ss.TryGetDouble(out var size) && size > 0)
+                {
+                    labelAmount = size;
+                    labelText = food.TryGetProperty("householdServingFullText", out var h) ? h.GetString() : null;
+                }
             }
         }
 
@@ -293,6 +315,28 @@ public static class UsdaClient
                 portions.Add(new UsdaPortion(desc.Trim(), grams));
         }
         return portions;
+    }
+
+    /// <summary>
+    /// Household measures in a search hit ("foodMeasures": Survey/FNDDS foods fill them in),
+    /// in USDA's rank order, skipping FNDDS's "Quantity not specified" stand-in.
+    /// </summary>
+    private static List<UsdaPortion> ParseSearchMeasures(JsonElement food)
+    {
+        var portions = new List<(int Rank, UsdaPortion Portion)>();
+        if (!food.TryGetProperty("foodMeasures", out var list) || list.ValueKind != JsonValueKind.Array) return new();
+        var n = 0;
+        foreach (var m in list.EnumerateArray())
+        {
+            n++;
+            if (!m.TryGetProperty("gramWeight", out var gw) || !gw.TryGetDouble(out var grams) || grams <= 0) continue;
+            var desc = Str(m, "disseminationText").Trim();
+            if (desc.Length == 0 || desc.Contains("Quantity not specified", StringComparison.OrdinalIgnoreCase)) continue;
+            if (portions.Any(x => x.Portion.Description.Equals(desc, StringComparison.OrdinalIgnoreCase))) continue;
+            var rank = m.TryGetProperty("rank", out var r) && r.TryGetInt32(out var rv) ? rv : 1000 + n;
+            portions.Add((rank, new UsdaPortion(desc, grams)));
+        }
+        return portions.OrderBy(p => p.Rank).Select(p => p.Portion).ToList();
     }
 
     private static string Str(JsonElement e, string prop) =>
