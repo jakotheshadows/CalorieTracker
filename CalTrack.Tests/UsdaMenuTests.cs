@@ -94,6 +94,13 @@ public sealed class UsdaMenuTests : IDisposable
         Assert.Contains("Rate limit", UsdaClient.ReadSearch(429, "").Error);
         Assert.Contains("offline", UsdaClient.ReadSearch(0, null).Error);
         Assert.Equal("USDA API error (HTTP 500).", UsdaClient.ReadSearch(500, "").Error);
+        Assert.Equal("USDA API error (HTTP 400): Invalid dataType", UsdaClient.ReadSearch(400, """{"error":"Bad Request","message":"Invalid dataType"}""").Error);
+        Assert.Equal("USDA API error (HTTP 400): Bad thing", UsdaClient.ReadSearch(400, """{"error":{"code":"X","message":"Bad thing"}}""").Error);
+        Assert.Equal("USDA API error (HTTP 400): bad query at /search?api_key=***", UsdaClient.ReadSearch(400, "bad  query\nat /search?api_key=SECRET123").Error);
+        Assert.Equal("USDA API error (HTTP 502).", UsdaClient.ReadSearch(502, "<html><body>Bad Gateway</body></html>").Error);
+        Assert.Equal("""USDA API error (HTTP 400): USDA's web server rejected the request before it reached the API ("400 Bad Request").""",
+            UsdaClient.ReadSearch(400, "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body><center>nginx</center></body></html>").Error);
+        Assert.EndsWith("…", UsdaClient.ReadSearch(400, new string('x', 500)).Error);
         Assert.Contains("couldn't be read", UsdaClient.ReadSearch(200, "<html>").Error);
         Assert.Equal("USDA has no food with id 5.", UsdaClient.ReadFood(404, "", 5).Error);
 

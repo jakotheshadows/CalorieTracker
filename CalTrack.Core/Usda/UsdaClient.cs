@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace CalorieTracker.Usda;
 
@@ -199,7 +200,9 @@ public static class UsdaClient
         if (status == (int)HttpStatusCode.NotFound && notFound is not null)
             return (null, notFound);
         if (status is < 200 or > 299)
-            return (null, $"USDA API error (HTTP {status}).");
+            return (null, ErrorReason(body) is { } reason
+                ? $"USDA API error (HTTP {status}): {reason}"
+                : $"USDA API error (HTTP {status}).");
         try
         {
             return (JsonDocument.Parse(body ?? ""), null);
@@ -208,6 +211,45 @@ public static class UsdaClient
         {
             return (null, "The USDA API sent a reply that couldn't be read.");
         }
+    }
+
+    /// <summary>
+    /// USDA's own explanation of a failed request, so an error says why and not just the status:
+    /// a JSON reply's message (api.data.gov nests it as {"error":{"message"}}), else the text
+    /// itself. One line, capped, with any api_key value masked. Null when there's nothing useful.
+    /// </summary>
+    private static string? ErrorReason(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        var reason = body;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.Object)
+                    root = err;
+                reason = Str(root, "message") is { Length: > 0 } m ? m
+                       : Str(root, "error") is { Length: > 0 } e ? e
+                       : body;
+            }
+        }
+        catch (JsonException) { }
+
+        // An HTML page comes from the web server in front of the API (nginx), not the API itself:
+        // say so, with the page's title.
+        if (reason.TrimStart().StartsWith('<'))
+        {
+            var title = Regex.Match(reason, @"<title>\s*(.*?)\s*</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            return title.Success && title.Groups[1].Value.Length > 0
+                ? $"USDA's web server rejected the request before it reached the API (\"{title.Groups[1].Value}\")."
+                : null;
+        }
+        reason = Regex.Replace(reason, @"api_key=[^&\s""']+", "api_key=***",
+            RegexOptions.IgnoreCase);
+        reason = string.Join(' ', reason.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return reason.Length <= 200 ? reason : reason[..200] + "…";
     }
 
     /// <summary>
