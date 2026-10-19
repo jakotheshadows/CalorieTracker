@@ -108,8 +108,13 @@ public static class UsdaClient
     public static bool IsTransient(int status, string? body) =>
         status is 502 or 503 or 504 || (status == 400 && IsHtml(body));
 
-    /// <summary>The waits before each retry of a <see cref="IsTransient"/> failure: two retries, after 1 s and 2 s.</summary>
-    public static readonly IReadOnlyList<TimeSpan> RetryDelays = new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2) };
+    /// <summary>
+    /// The waits before each retry of a <see cref="IsTransient"/> failure: three retries, soon
+    /// after one another. In a run of 30 agents a retry failed as often as a first try (about
+    /// 42%) however long it waited, so more tries help and longer waits don't.
+    /// </summary>
+    public static readonly IReadOnlyList<TimeSpan> RetryDelays =
+        new[] { TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1) };
 
     private static bool IsHtml(string? body) => body?.TrimStart().StartsWith('<') == true;
 
@@ -364,8 +369,16 @@ public static class UsdaClient
     }
 
     /// <summary>
+    /// The name given to FNDDS's "Quantity not specified" portion: the amount its survey assumes
+    /// when someone didn't say how much they ate (31 g of salad dressing, one 205 g Big Mac).
+    /// </summary>
+    public const string TypicalServing = "1 typical serving";
+
+    /// <summary>
     /// Household measures. SR Legacy phrases them as amount + modifier ("1" "sandwich");
-    /// Foundation/Survey foods use portionDescription or a measure unit.
+    /// Foundation/Survey foods use portionDescription or a measure unit. A Survey (FNDDS)
+    /// "Quantity not specified" row is named <see cref="TypicalServing"/>: built from its
+    /// modifier, a code (90000), it used to show up as a portion named "1 90000".
     /// </summary>
     private static List<UsdaPortion> ParsePortions(JsonElement food)
     {
@@ -376,9 +389,11 @@ public static class UsdaClient
             if (!p.TryGetProperty("gramWeight", out var gw) || !gw.TryGetDouble(out var grams) || grams <= 0) continue;
             var amount = p.TryGetProperty("amount", out var a) && a.TryGetDouble(out var av) && av > 0 ? av : 1;
             var desc = Str(p, "portionDescription");
-            if (string.IsNullOrWhiteSpace(desc) || desc.Contains("Quantity not specified", StringComparison.OrdinalIgnoreCase))
+            if (desc.Contains("Quantity not specified", StringComparison.OrdinalIgnoreCase)) desc = TypicalServing;
+            if (string.IsNullOrWhiteSpace(desc))
             {
                 var modifier = Str(p, "modifier");
+                if (modifier.All(char.IsDigit)) modifier = ""; // FNDDS modifiers are codes, not words
                 var unit = p.TryGetProperty("measureUnit", out var mu) ? Str(mu, "name") : "";
                 if (unit is "undetermined") unit = "";
                 desc = string.Join(' ', new[] { amount.ToString("0.##", CultureInfo.InvariantCulture), unit, modifier }

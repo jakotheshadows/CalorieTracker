@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using CalorieTracker.Data;
 using CalorieTracker.Models;
 using CalorieTracker.Sync;
@@ -231,9 +232,12 @@ public static partial class CalTrackTools
         }
         if (!string.IsNullOrWhiteSpace(portion))
         {
+            // search_usda shows portions as "1 sandwich (112 g)": accept that form as well as the bare name.
             var want = portion.Trim();
+            var bare = ShownGrams.Replace(want, "");
             var match = food.Portions.FirstOrDefault(p => p.Description.Equals(want, StringComparison.OrdinalIgnoreCase))
-                        ?? food.Portions.FirstOrDefault(p => p.Description.Contains(want, StringComparison.OrdinalIgnoreCase));
+                        ?? food.Portions.FirstOrDefault(p => p.Description.Equals(bare, StringComparison.OrdinalIgnoreCase))
+                        ?? food.Portions.FirstOrDefault(p => bare.Length > 0 && p.Description.Contains(bare, StringComparison.OrdinalIgnoreCase));
             if (match is null)
                 throw new McpException(food.Portions.Count == 0
                     ? $"USDA lists no household portions for this food; use servingAmount + servingUnit instead."
@@ -249,6 +253,9 @@ public static partial class CalTrackTools
 
     private static string PortionText(UsdaPortion p) =>
         $"{p.Description} ({p.Grams.ToString("0.#", CultureInfo.InvariantCulture)} g)";
+
+    // The " (112 g)" PortionText adds, at the end of a portion name.
+    private static readonly Regex ShownGrams = new(@"\s*\(\s*\d+(?:\.\d+)?\s*g\s*\)\s*$", RegexOptions.IgnoreCase);
 
     private static FoodCategory ParseCategory(string? category, string baseUnit)
     {

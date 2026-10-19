@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using CalorieTracker.Sync;
@@ -71,7 +72,36 @@ public sealed class UsdaGateway(
         }
     }
 
+    // Lookups being fetched right now, by path. Two tools wanting the same food at once (two
+    // agents' searches both looking up cheddar's portions, say) share one fetch instead of
+    // queueing the same 2.5 MB record twice.
+    private readonly ConcurrentDictionary<string, Lazy<Task<AppResponse>>> _inFlight = new();
+
     private async Task<AppResponse> FetchAsync(string path)
+    {
+        var started = DateTime.UtcNow;
+        var mine = new Lazy<Task<AppResponse>>(() => FetchNowAsync(path, started));
+        var shared = _inFlight.GetOrAdd(path, mine);
+        if (shared == mine)
+        {
+            try { return await mine.Value; }
+            finally { _inFlight.TryRemove(new KeyValuePair<string, Lazy<Task<AppResponse>>>(path, mine)); }
+        }
+
+        // Joined a fetch that began earlier, so on its clock. If it ran out of time or ended on a
+        // chance failure while this lookup still has time of its own, ask for itself.
+        try
+        {
+            var answer = await shared.Value;
+            if (!UsdaClient.IsTransient(answer.Status, answer.Body) || !HasTimeLeft(started)) return answer;
+        }
+        catch (McpException) when (HasTimeLeft(started)) { }
+        return await FetchNowAsync(path, started);
+    }
+
+    private bool HasTimeLeft(DateTime started) => DateTime.UtcNow + MinTimeToAnswer < started + _timeout;
+
+    private async Task<AppResponse> FetchNowAsync(string path, DateTime started)
     {
         // Only ask an app that has said it can answer: a question it doesn't understand
         // would just sit there until the timeout.
@@ -87,11 +117,11 @@ public sealed class UsdaGateway(
 
         // USDA fails some requests by chance (UsdaClient.IsTransient), so ask again, within the
         // same overall wait. If time runs out on a retry, USDA's last answer is the truer report.
-        var deadline = DateTime.UtcNow + _timeout;
+        var deadline = started + _timeout;
         AppResponse? answered = null;
         for (var attempt = 1; ; attempt++)
         {
-            var (id, response, waited) = await AskAsync(path, deadline);
+            var (id, response, waited) = await AskAsync(path, started, deadline);
             if (response is null)
             {
                 Record(id, path, attempt, "no answer", null, waited);
@@ -118,13 +148,22 @@ public sealed class UsdaGateway(
         }
     }
 
+    /// <summary>
+    /// A request id that sorts by when its lookup started. The app answers requests in file-name
+    /// order, so time-first names make that first come, first served, and a lookup's retries
+    /// (which share its start) go ahead of lookups that began after it. Random ids alone let a
+    /// request wait behind newer ones until its time ran out.
+    /// </summary>
+    public static string RequestId(DateTime lookupStarted) =>
+        lookupStarted.ToUniversalTime().ToString("yyyyMMdd'T'HHmmssfff", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N");
+
     /// <summary>One request to the app: its answer, or null once <paramref name="deadline"/> passes (the request is withdrawn).</summary>
-    private async Task<(string Id, AppResponse? Response, TimeSpan Waited)> AskAsync(string path, DateTime deadline)
+    private async Task<(string Id, AppResponse? Response, TimeSpan Waited)> AskAsync(string path, DateTime lookupStarted, DateTime deadline)
     {
         var started = DateTime.UtcNow;
         var request = new AppRequest
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = RequestId(lookupStarted),
             CreatedUtc = started,
             Kind = AppRequest.UsdaGet,
             // The app skips a request whose asker has stopped waiting.

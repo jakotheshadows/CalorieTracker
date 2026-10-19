@@ -156,12 +156,21 @@ aren't throttled (measured: every 1.0 s while the page's slowed to once a minute
 watches `requests/` and replies in about a second. It stays thin on purpose — a keyed fetch —
 so no lookup logic lives in JavaScript.
 
+**Oldest first.** The worker answers one request at a time, oldest first, listing the folder
+again after each. Request ids start with the time their lookup began, so a retry, which keeps its
+lookup's time, goes ahead of lookups that began after it; an older server's random id is placed
+by when the worker first saw it. With random ids alone (before 0.7.3), a request could wait
+behind newer ones until its time ran out. A food asked for twice at once is fetched once and
+shared: in one eval run a 2.5 MB USDA record took 12.8 s, and the second request for it timed out
+in the queue behind that fetch. A lookup that joins a fetch already under way and sees it time
+out or fail by chance asks again on its own clock.
+
 **USDA's chance failures are asked again.** Now and then USDA's web server answers a valid
-request with a bare nginx "400 Bad Request" page. In one run of 20 agents, 62 of the 108
-searches USDA answered got it, and the same request worked seconds later. So a lookup that gets
-that page, or a 502-504, is asked again after 1 s and then 2 s, within the same 20-second wait
-and only while there's a second left for the app to answer; if time runs out, the error is
-USDA's answer, not a timeout. A 400 in JSON (the API objecting
+search with a bare nginx "400 Bad Request" page. In a run of 30 agents, 43% of searches got it
+on the first try and no food-record fetch did, and a retry failed just as often however long it
+waited. So a lookup that gets that page, or a 502-504, is asked again after 0.25 s, 0.5 s and
+1 s, within the same 20-second wait and only while there's a second left for the app to answer;
+if time runs out, the error is USDA's answer, not a timeout. A 400 in JSON (the API objecting
 to the request) and a 429 (the rate limit) aren't retried. The rule is Core's
 (`UsdaClient.IsTransient`), so the app's own lookups retry the same way.
 

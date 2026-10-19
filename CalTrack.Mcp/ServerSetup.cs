@@ -7,11 +7,13 @@ using ModelContextProtocol.Server;
 namespace CalTrack.Mcp;
 
 /// <summary>
-/// The server's identity and its instructions: the one text a client keeps in the model's
-/// context from the moment it connects. Tool descriptions aren't enough on their own — a
-/// client that loads tools on demand shows the model only tool NAMES until it picks some,
-/// and in testing it picked the menu, log and USDA search tools and never read add_recipe's
-/// description (18 of 20 fresh sessions stopped to ask instead of building a recipe).
+/// The server's identity and its instructions: text a client keeps in the model's context for
+/// the whole session. Tool descriptions aren't enough on their own — a client that loads tools
+/// on demand shows the model only tool NAMES until it picks some, and in testing it picked the
+/// menu, log and USDA search tools and never read add_recipe's description (18 of 20 fresh
+/// sessions stopped to ask instead of building a recipe). Clients decide when the instructions
+/// arrive: Claude Desktop's subagents got them only after their first tool load, so the tools
+/// they load first must still point to add_recipe themselves.
 /// </summary>
 public static class ServerSetup
 {

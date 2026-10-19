@@ -18,7 +18,9 @@ public sealed class UsdaMenuTests : IDisposable
     /// <summary>The page USDA's web server sent for over half of one run's searches (captured 2026-10-17).</summary>
     internal static readonly string NginxPage = File.ReadAllText(Path.Combine(Fixtures, "usda-nginx-400.html"));
 
-    private static readonly TimeSpan[] NoWait = { TimeSpan.Zero, TimeSpan.Zero };
+    // As many retries as the real server makes, without the waits.
+    private static readonly TimeSpan[] NoWait = UsdaClient.RetryDelays.Select(_ => TimeSpan.Zero).ToArray();
+    private static readonly int Attempts = UsdaClient.RetryDelays.Count + 1;
 
     private readonly string _dir = Directory.CreateTempSubdirectory("caltrack-usda-test-").FullName;
     private readonly DataFolderStore _store;
@@ -252,6 +254,55 @@ public sealed class UsdaMenuTests : IDisposable
         Assert.Equal(0, InboxCount());
     }
 
+    [Theory]
+    [InlineData("1 serving")]
+    [InlineData("1 serving (70 g)")]  // exactly as search_usda shows it (eval v2: refused in 0.7.2)
+    [InlineData("1 SERVING ( 70 g )")]
+    public async Task A_portion_is_accepted_as_named_or_as_search_usda_shows_it(string portion)
+    {
+        var result = JsonDocument.Parse(await CalTrackTools.AddMenuItem(_store, Usda(), usdaFdcId: 172226, portion: portion)).RootElement;
+        Assert.Equal("1 serving (70 g)", result.GetProperty("added").GetProperty("serving").GetString());
+    }
+
+    [Fact]
+    public async Task The_shown_form_picks_that_exact_portion_not_one_containing_it()
+    {
+        _app.MoreFoods[9001] = """
+            {"fdcId":9001,"description":"Sandwich","dataType":"Survey (FNDDS)",
+             "foodNutrients":[{"nutrient":{"number":"208"},"amount":250}],
+             "foodPortions":[{"portionDescription":"1 sandwich, any size","gramWeight":150},{"portionDescription":"1 sandwich","gramWeight":112}]}
+            """;
+        var result = JsonDocument.Parse(await CalTrackTools.AddMenuItem(_store, Usda(), usdaFdcId: 9001, portion: "1 sandwich (112 g)")).RootElement;
+        Assert.Equal("1 sandwich (112 g)", result.GetProperty("added").GetProperty("serving").GetString());
+    }
+
+    [Fact]
+    public async Task A_recipe_ingredient_takes_the_shown_portion_too()
+    {
+        var result = JsonDocument.Parse(await CalTrackTools.AddRecipe(_store, Usda(), "Ice cream sandwich treat",
+            [new RecipeIngredientInput { UsdaFdcId = 172226, Portion = "1 serving (70 g)", Count = 2 }])).RootElement;
+        Assert.Equal("2 × 1 serving (70 g) = 140 g", result.GetProperty("ingredients")[0].GetProperty("amount").GetString());
+    }
+
+    [Fact]
+    public void Fndds_unspecified_quantity_is_a_typical_serving_not_a_code()
+    {
+        // FNDDS's "Quantity not specified" row has the modifier code 90000; it used to show up as "1 90000".
+        var (food, error) = UsdaClient.ReadFood(200, File.ReadAllText(Path.Combine(Fixtures, "usda-food-2710195.json")), 2710195);
+        Assert.Null(error);
+        Assert.Equal(new[] { "1 typical serving", "1 cup", "1 dipping-size container", "1 packet", "1 tablespoon" }, food!.Portions.Select(p => p.Description));
+        Assert.Equal(31, food.Portions[0].Grams);
+    }
+
+    [Fact]
+    public async Task An_fndds_food_added_without_a_portion_gets_the_typical_amount()
+    {
+        // Its first portion: 31 g of dressing, labelled as what it is (0.7.2 said "1 90000 (31 g)").
+        var result = JsonDocument.Parse(await CalTrackTools.AddMenuItem(_store, Usda(), usdaFdcId: 2710195)).RootElement;
+        Assert.Equal("1 typical serving (31 g)", result.GetProperty("added").GetProperty("serving").GetString());
+        Assert.DoesNotContain(result.GetProperty("otherPortions").EnumerateArray(), p => p.GetString()!.Contains("90000"));
+    }
+
     [Fact]
     public async Task An_unknown_portion_lists_the_real_ones()
     {
@@ -327,23 +378,82 @@ public sealed class UsdaMenuTests : IDisposable
     [Fact]
     public async Task A_search_USDA_fails_by_chance_is_asked_again()
     {
-        _app.TransientFailures = 2;
+        _app.TransientFailures = Attempts - 1;
         var result = JsonDocument.Parse(await CalTrackTools.SearchUsda(Usda(), "ice cream sandwich")).RootElement;
 
         Assert.True(result.GetProperty("count").GetInt32() > 0);
         var asked = Searches();
-        Assert.Equal(3, asked.Count);
+        Assert.Equal(Attempts, asked.Count);
         Assert.Single(asked.Distinct()); // the same request each time
     }
 
     [Fact]
-    public async Task After_two_retries_USDAs_answer_is_reported()
+    public void Retries_are_three_and_quick()
+    {
+        // A retry fails about as often as a first try however long it waits (eval v2), so the
+        // tries come soon after one another: four in all, within two seconds of waiting.
+        Assert.Equal(3, UsdaClient.RetryDelays.Count);
+        Assert.True(UsdaClient.RetryDelays.Aggregate(TimeSpan.Zero, (a, b) => a + b) <= TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task After_every_retry_USDAs_answer_is_reported()
     {
         _app.TransientFailures = 10;
         var ex = await Assert.ThrowsAsync<McpException>(() => CalTrackTools.SearchUsda(Usda(), "ice cream sandwich"));
 
         Assert.StartsWith("USDA API error (HTTP 400): USDA's web server answered with an error page", ex.Message);
-        Assert.Equal(3, Searches().Count);
+        Assert.Equal(Attempts, Searches().Count);
+    }
+
+    [Fact]
+    public void Request_ids_sort_by_when_their_lookup_began()
+    {
+        // The app answers in file-name order, so this order is the queue's.
+        var t = new DateTime(2026, 10, 18, 19, 57, 31, 900, DateTimeKind.Utc);
+        var ids = new[] { UsdaGateway.RequestId(t.AddMilliseconds(1)), UsdaGateway.RequestId(t), UsdaGateway.RequestId(t.AddSeconds(1)) };
+        Assert.Equal(new[] { ids[1], ids[0], ids[2] }, ids.Order(StringComparer.Ordinal));
+        Assert.Matches(@"^20261018T195731900-[0-9a-f]{32}$", ids[1]);
+        Assert.NotEqual(UsdaGateway.RequestId(t), UsdaGateway.RequestId(t)); // still unique
+    }
+
+    [Fact]
+    public async Task A_retry_keeps_its_lookups_place_in_line()
+    {
+        _app.TransientFailures = 1;
+        await CalTrackTools.SearchUsda(Usda(), "ice cream sandwich", maxResults: 1);
+
+        List<(string Id, string Path)> asked;
+        lock (_app.Paths) asked = _app.Asked.Where(a => a.Path.StartsWith("foods/search?")).ToList();
+        Assert.Equal(2, asked.Count);
+        // Same time prefix as the first try, so it sorts ahead of anything asked since.
+        Assert.Equal(asked[0].Id.Split('-')[0], asked[1].Id.Split('-')[0]);
+    }
+
+    [Fact]
+    public async Task Two_lookups_of_one_food_at_once_share_one_fetch()
+    {
+        var usda = Usda();
+        var both = await Task.WhenAll(usda.GetAsync(172226), usda.GetAsync(172226));
+
+        Assert.All(both, r => Assert.Equal(172226, r.Food.FdcId));
+        lock (_app.Paths) Assert.Single(_app.Paths, p => p == UsdaClient.FoodPath(172226));
+    }
+
+    [Fact]
+    public async Task A_lookup_that_joins_one_that_times_out_asks_on_its_own_clock()
+    {
+        _app.Ignore = 1; // the first lookup's request is lost
+        var usda = Usda(timeoutSeconds: 3);
+        var first = usda.GetAsync(172226);
+        await Task.Delay(1500);
+        var joiner = usda.GetAsync(172226); // joins the first one's fetch, 1.5 s into its 3
+
+        var ex = await Assert.ThrowsAsync<McpException>(() => first);
+        Assert.Contains("didn't answer", ex.Message);
+        var (food, _) = await joiner; // then asks for itself, with 1.5 s of its own left
+        Assert.Equal(172226, food.FdcId);
+        lock (_app.Paths) Assert.Single(_app.Paths, p => p == UsdaClient.FoodPath(172226));
     }
 
     [Theory]
@@ -418,7 +528,7 @@ public sealed class UsdaMenuTests : IDisposable
         Assert.StartsWith("USDA's web server answered with an error page (\"400 Bad Request\")", first.GetProperty("reason").GetString());
         Assert.Equal(NginxPage.Length, first.GetProperty("length").GetInt32());
         Assert.Equal(42, first.GetProperty("fetchMs").GetInt32());
-        Assert.Equal(32, first.GetProperty("id").GetString()!.Length);
+        Assert.Matches(@"^\d{8}T\d{9}-[0-9a-f]{32}$", first.GetProperty("id").GetString());
 
         var second = search[1];
         Assert.Equal(2, second.GetProperty("attempt").GetInt32());
@@ -455,10 +565,10 @@ public sealed class UsdaMenuTests : IDisposable
         Assert.Equal("USDA API error (HTTP 400): Invalid dataType", error);
         Assert.Equal(1, refused.Calls);
 
-        var stuck = new ScriptedUsda((502, ""), (502, ""), (502, ""), (200, search));
+        var stuck = new ScriptedUsda(Enumerable.Repeat((502, ""), Attempts).Append((200, search)).ToArray());
         (_, error) = await UsdaClient.SearchAsync(new HttpClient(stuck), "key", "ice cream sandwich", 5, retryDelays: NoWait);
         Assert.Equal("USDA API error (HTTP 502). This happens now and then; try again in a moment.", error);
-        Assert.Equal(3, stuck.Calls);
+        Assert.Equal(Attempts, stuck.Calls);
     }
 
     /// <summary>USDA replying with each of <paramref name="replies"/> in turn (the last one repeats).</summary>
@@ -788,6 +898,9 @@ public sealed class UsdaMenuTests : IDisposable
         public int? StopAfter;
         public int? FetchMs;
         public readonly List<string> Paths = new();
+        public readonly List<(string Id, string Path)> Asked = new(); // under the Paths lock
+        public readonly Dictionary<int, string> MoreFoods = new();    // fdcId → a food record's JSON
+        public int Ignore;                                            // this many requests are lost, never answered
 
         public FakeApp(string root)
         {
@@ -801,6 +914,7 @@ public sealed class UsdaMenuTests : IDisposable
                         foreach (var path in Directory.GetFiles(requests, "*.json"))
                         {
                             if (Answered >= StopAfter) break; // stopped answering: requests stay put
+                            if (Ignore > 0) { Ignore--; File.Delete(path); continue; }
                             if (ReadLive(File.ReadAllText(path)) is { } request)
                             {
                                 Directory.CreateDirectory(responses);
@@ -831,7 +945,7 @@ public sealed class UsdaMenuTests : IDisposable
         private AppResponse Answer(AppRequest r)
         {
             var path = r.Path ?? "";
-            lock (Paths) Paths.Add(path);
+            lock (Paths) { Paths.Add(path); Asked.Add((r.Id, path)); }
             var response = new AppResponse { Id = r.Id, Error = Error, FetchMs = FetchMs };
             if (Error is not null) return response;
             if (TransientFailures > 0)
@@ -853,6 +967,10 @@ public sealed class UsdaMenuTests : IDisposable
                 (response.Status, response.Body) = (status, "");
             else if (path == UsdaClient.FoodPath(172226))
                 (response.Status, response.Body) = (200, File.ReadAllText(Path.Combine(Fixtures, "usda-food-172226.json")));
+            else if (MoreFoods.FirstOrDefault(f => path == UsdaClient.FoodPath(f.Key)) is { Value: { } more })
+                (response.Status, response.Body) = (200, more);
+            else if (path == UsdaClient.FoodPath(2710195)) // a Survey (FNDDS) record, "Quantity not specified" first
+                (response.Status, response.Body) = (200, File.ReadAllText(Path.Combine(Fixtures, "usda-food-2710195.json")));
             else if (path == UsdaClient.FoodPath(2105271)) // a Branded full record that lost its servingSize
                 (response.Status, response.Body) = (200, File.ReadAllText(Path.Combine(Fixtures, "usda-food-2105271.json")));
             else

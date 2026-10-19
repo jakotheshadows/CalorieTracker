@@ -38,19 +38,25 @@ async function poll() {
         try { requests = await dir.getDirectoryHandle("requests"); }
         catch { return; } // none asked yet (or access lapsed: the asker times out with an explanation)
 
-        // Writers create ".<id>.tmp" and rename when complete: only finished requests count.
-        const names = [];
-        for await (const [name, h] of requests.entries())
-            if (h.kind === "file" && !name.startsWith(".") && name.toLowerCase().endsWith(".json")) names.push(name);
-        for (const name of [...stuck]) if (!names.includes(name)) stuck.delete(name);
-
-        for (const name of names.sort()) {
-            if (stuck.has(name)) continue;
-            let req = null;
-            try { req = JSON.parse(await (await (await requests.getFileHandle(name)).getFile()).text()); }
-            catch { /* unreadable or vanished: nothing to answer */ }
-            // Past its asker's timeout: answering would only leave an orphaned response.
-            if (req && req.Id && !expired(req)) await respond(req.Id, await answer(req));
+        // One at a time, oldest first (see pending), listing again after each: a request written
+        // while another was being fetched (often a retry) goes next instead of after the rest of
+        // a batch.
+        const tried = new Set();
+        for (;;) {
+            const names = await pending(requests);
+            for (const name of [...stuck]) if (!names.includes(name)) stuck.delete(name);
+            const name = names.find(n => !stuck.has(n) && !tried.has(n));
+            if (!name) break;
+            tried.add(name);
+            try {
+                let req = null;
+                try { req = JSON.parse(await (await (await requests.getFileHandle(name)).getFile()).text()); }
+                catch { /* unreadable or vanished: nothing to answer */ }
+                // Past its asker's timeout: answering would only leave an orphaned response.
+                if (req && req.Id && !expired(req)) await respond(req.Id, await answer(req));
+            } catch {
+                continue; // the answer couldn't be written: leave the request for the next poll
+            }
             try { await requests.removeEntry(name); } catch { stuck.add(name); }
         }
     } catch {
@@ -58,6 +64,26 @@ async function poll() {
     } finally {
         busy = false;
     }
+}
+
+// Writers create ".<id>.tmp" and rename when complete: only finished requests count. Oldest
+// first: newer servers start each id with its lookup's time (UTC yyyyMMddTHHmmssfff); an older
+// server's random id is placed by when this worker first saw it, written the same way, so it
+// takes its turn instead of sorting behind every timed id.
+const TIME_FIRST = /^\d{8}T\d{9}-/;
+const firstSeen = new Map();
+
+async function pending(requests) {
+    const names = [];
+    for await (const [name, h] of requests.entries())
+        if (h.kind === "file" && !name.startsWith(".") && name.toLowerCase().endsWith(".json")) names.push(name);
+    for (const name of [...firstSeen.keys()]) if (!names.includes(name)) firstSeen.delete(name);
+    const order = (name) => {
+        if (TIME_FIRST.test(name)) return name;
+        if (!firstSeen.has(name)) firstSeen.set(name, new Date().toISOString().replace(/[-:.Z]/g, "") + "-");
+        return firstSeen.get(name) + name;
+    };
+    return names.map(n => [order(n), n]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(p => p[1]);
 }
 
 function expired(req) {
